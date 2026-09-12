@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "FamilyEntry": {
+      "title": "Family Relation Entry",
+      "description": "Represents a lineage relation between son, father, grandfather, and great-grandfather.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "sonName": { "type": "string", "maxLength": 100 },
+        "fatherName": { "type": "string", "maxLength": 100 },
+        "grandfatherName": { "type": "string", "maxLength": 100 },
+        "greatGrandfatherName": { "type": "string", "maxLength": 100 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "sonName", "fatherName", "userId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/familyEntries/{entryId}": {
+      "schema": "FamilyEntry",
+      "description": "User specific family tree entries collection."
+    }
+  }
+}

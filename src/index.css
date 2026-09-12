@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Cairo', sans-serif;
+  }
+  .font-amiri {
+    font-family: 'Amiri', serif;
+  }
+}
+
+/* Custom Heritage Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #f1ebd9;
+}
+::-webkit-scrollbar-thumb {
+  background: #c5a880;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9c7b4c;
+}
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+}
+
+/* Heritage pattern backgrounds */
+.heritage-pattern {
+  background-color: #fcf8f2;
+  background-image: radial-gradient(#d4c3a3 0.75px, transparent 0.75px), radial-gradient(#d4c3a3 0.75px, #fcf8f2 0.75px);
+  background-size: 30px 30px;
+  background-position: 0 0, 15px 15px;
+}
+
+.dark .heritage-pattern {
+  background-color: #121212;
+  background-image: radial-gradient(#333 0.75px, transparent 0.75px), radial-gradient(#333 0.75px, #121212 0.75px);
+  background-size: 30px 30px;
+  background-position: 0 0, 15px 15px;
+}
+

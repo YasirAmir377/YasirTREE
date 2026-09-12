@@ -1,0 +1,6 @@
+{
+  "name": "شجرة العائلة التراثية",
+  "description": "تطبيق احترافي لإدارة شجرة العائلة وعلاقات الآباء والأبناء مع جدول شبيه بـ Excel وتصدير عالي الدقة SVG وPDF.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
