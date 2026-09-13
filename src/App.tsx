@@ -122,15 +122,36 @@ export default function App() {
     }
   };
 
-  const handleAddChild = (fatherName: string, sonName: string) => {
+  const handleAddChild = (fatherName: string, sonName: string, tags: string[] = []) => {
     const newEntry: RelationEntry = {
       id: `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       fatherName: fatherName,
       sonName: sonName,
-      tags: [],
+      tags: tags,
       createdAt: new Date().toISOString()
     };
     setEntries(prev => [newEntry, ...prev]);
+  };
+
+  const handleDeleteNode = (personName: string) => {
+    if (window.confirm(`هل أنت متأكد من حذف (${personName}) وجميع فروعه وأبنائه المرتبطين به من الشجرة؟`)) {
+      // Find all descendant names recursively
+      const descendants = new Set<string>();
+      const queue = [personName];
+      while (queue.length > 0) {
+        const curr = queue.shift()!;
+        descendants.add(curr);
+        entries.forEach(e => {
+          if (e.fatherName === curr && e.sonName) {
+            descendants.add(e.sonName);
+            queue.push(e.sonName);
+          }
+        });
+      }
+
+      // Filter out any entries where sonName or fatherName is in descendants
+      setEntries(prev => prev.filter(e => !descendants.has(e.sonName)));
+    }
   };
 
   return (
@@ -165,6 +186,7 @@ export default function App() {
             settings={settings}
             setSettings={setSettings}
             onAddChild={handleAddChild}
+            onDeleteNode={handleDeleteNode}
           />
         ) : (
           <EntriesTable

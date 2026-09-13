@@ -19,7 +19,8 @@ interface FamilyTreeViewerProps {
   onSwitchToEntries: () => void;
   settings: TreeSettings;
   setSettings: React.Dispatch<React.SetStateAction<TreeSettings>>;
-  onAddChild: (fatherName: string, sonName: string) => void;
+  onAddChild: (fatherName: string, sonName: string, tags?: string[]) => void;
+  onDeleteNode: (personName: string) => void;
 }
 
 export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
@@ -28,8 +29,30 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   onSwitchToEntries,
   settings,
   setSettings,
-  onAddChild
+  onAddChild,
+  onDeleteNode
 }) => {
+  const [showAddChildModal, setShowAddChildModal] = useState<boolean>(false);
+  const [addingFatherName, setAddingFatherName] = useState<string>('');
+  const [newChildName, setNewChildName] = useState<string>('');
+  const [selectedChildTags, setSelectedChildTags] = useState<string[]>([]);
+
+  const AVAILABLE_TAG_OPTIONS = ['شهيد', 'طبيب', 'ضابط', 'شيخ', 'تدريسي', 'معلم', 'متوفي'];
+
+  const handleOpenAddModal = (fatherName: string) => {
+    setAddingFatherName(fatherName);
+    setNewChildName('');
+    setSelectedChildTags([]);
+    setShowAddChildModal(true);
+  };
+
+  const handleConfirmAddChild = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newChildName.trim() && addingFatherName) {
+      onAddChild(addingFatherName, newChildName.trim(), selectedChildTags);
+      setShowAddChildModal(false);
+    }
+  };
   const [zoom, setZoom] = useState<number>(1.0); // Standard starting at 100%
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState<boolean>(false);
@@ -324,22 +347,37 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             {member.name}
           </text>
 
-          {/* Plus button badge appearing when node is selected */}
+          {/* Plus (+) button badge on one side and Delete (x) button on the other when node is selected */}
           {selectedPerson === member.name && (
-            <g 
-              transform={`translate(${dynamicRx - 10}, -30)`}
-              onClick={(e) => {
-                e.stopPropagation();
-                const newSonName = prompt(`إضافة ابن جديد لـ (${member.name}):`, `ابن ${member.name}`);
-                if (newSonName && newSonName.trim()) {
-                  onAddChild(member.name, newSonName.trim());
-                }
-              }}
-              style={{ cursor: 'pointer' }}
-            >
-              <circle cx="0" cy="0" r="14" fill="#b89753" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
-              <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">+</text>
-            </g>
+            <>
+              {/* Plus (+) button */}
+              <g 
+                transform={`translate(${dynamicRx - 10}, -30)`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenAddModal(member.name);
+                }}
+                style={{ cursor: 'pointer' }}
+                title="إضافة ابن جديد"
+              >
+                <circle cx="0" cy="0" r="14" fill="#b89753" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
+                <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">+</text>
+              </g>
+
+              {/* Delete (x) button on the opposite side */}
+              <g 
+                transform={`translate(-${dynamicRx - 10}, -30)`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteNode(member.name);
+                }}
+                style={{ cursor: 'pointer' }}
+                title="حذف الفرد وجميع فروعه"
+              >
+                <circle cx="0" cy="0" r="14" fill="#991b1b" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
+                <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="14" fontWeight="bold">×</text>
+              </g>
+            </>
           )}
         </g>
       </g>
@@ -686,6 +724,78 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 إغلاق
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Child Modal with Tags Selection */}
+      {showAddChildModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-[#fcf8f2] dark:bg-[#1e1915] border border-amber-300 dark:border-[#483d31] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold font-amiri text-amber-950 dark:text-amber-100">
+              إضافة ابن جديد لـ ({addingFatherName})
+            </h3>
+            <p className="text-xs text-stone-600 dark:text-stone-300">
+              أدخل اسم الفرد الجديد واختر الصفات والمناصب (مثل: شهيد، طبيب، ضابط، شيخ، إلخ):
+            </p>
+
+            <form onSubmit={handleConfirmAddChild} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">اسم الابن الجديد:</label>
+                <input 
+                  type="text"
+                  value={newChildName}
+                  onChange={(e) => setNewChildName(e.target.value)}
+                  placeholder="مثال: أحمد"
+                  autoFocus
+                  required
+                  className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-amber-200 dark:border-stone-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1.5">السمات والمهن (اختياري):</label>
+                <div className="flex flex-wrap gap-2">
+                  {AVAILABLE_TAG_OPTIONS.map(tag => {
+                    const isSelected = selectedChildTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setSelectedChildTags(prev => 
+                            isSelected ? prev.filter(t => t !== tag) : [...prev, tag]
+                          );
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer border ${
+                          isSelected 
+                            ? 'bg-amber-800 text-amber-100 border-amber-600 shadow-xs' 
+                            : 'bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300 border-stone-200 dark:border-stone-700 hover:bg-amber-100 dark:hover:bg-stone-700'
+                        }`}
+                      >
+                        {tag} {isSelected && '✓'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-amber-200 dark:border-stone-700">
+                <button
+                  type="button"
+                  onClick={() => setShowAddChildModal(false)}
+                  className="px-4 py-2 bg-stone-300 dark:bg-stone-700 text-stone-800 dark:text-stone-200 rounded-xl text-xs font-medium cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-amber-800 hover:bg-amber-900 text-amber-100 rounded-xl text-xs font-bold transition-all cursor-pointer shadow"
+                >
+                  إضافة للشجرة
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
