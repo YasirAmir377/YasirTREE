@@ -246,8 +246,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       <g key={`${member.name}-${level}-${x}-${y}`}>
         {/* Organic or geometric branching */}
         {hasChildren && member.children.map((child, idx) => {
-          // Dynamic spread based on children count and depth level to prevent overlapping
-          const childSpread = Math.max(spread * 0.75, 260 + (numChildren * 35));
+          // Robust child spread scaling with child count and name widths to prevent any overlapping
+          const baseSpacing = Math.max(280, numChildren * 140);
+          const childSpread = Math.max(spread * 0.85, baseSpacing);
           const spreadFactor = numChildren === 1 ? 0 : (idx - (numChildren - 1) / 2);
           const childX = x + spreadFactor * childSpread;
           const childY = y + yOffset; // Vertical distance between generations based on order
