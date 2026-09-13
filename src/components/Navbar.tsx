@@ -69,15 +69,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="text-stone-500">|</span>
             <span>العلاقات: <strong className="text-amber-300">{totalRelations}</strong></span>
           </div>
-
-          <button
-            onClick={onExportClick}
-            className="flex items-center gap-1.5 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-500 hover:to-amber-600 text-white text-xs font-medium px-3.5 py-2 rounded-lg shadow transition-all border border-amber-500/40 cursor-pointer"
-            title="تصدير الشجرة بجودة عالية SVG / PDF"
-          >
-            <Download className="w-4 h-4" />
-            <span>تصدير الشجرة</span>
-          </button>
         </div>
       </div>
     </header>

@@ -122,6 +122,17 @@ export default function App() {
     }
   };
 
+  const handleAddChild = (fatherName: string, sonName: string) => {
+    const newEntry: RelationEntry = {
+      id: `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      fatherName: fatherName,
+      sonName: sonName,
+      tags: [],
+      createdAt: new Date().toISOString()
+    };
+    setEntries(prev => [newEntry, ...prev]);
+  };
+
   return (
     <div className="min-h-screen heritage-pattern flex flex-col text-stone-800 dark:text-stone-100">
       {/* Top Navbar */}
@@ -153,6 +164,7 @@ export default function App() {
             onSwitchToEntries={() => setActiveTab('entries')}
             settings={settings}
             setSettings={setSettings}
+            onAddChild={handleAddChild}
           />
         ) : (
           <EntriesTable

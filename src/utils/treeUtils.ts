@@ -16,6 +16,8 @@ export const INITIAL_ENTRIES: RelationEntry[] = [
   { id: '13', sonName: 'مهدى', fatherName: 'نجم', grandfatherName: '', greatGrandfatherName: '', createdAt: new Date().toISOString() },
   { id: '14', sonName: 'ابراهيم', fatherName: 'ساهر', grandfatherName: 'معجون', greatGrandfatherName: 'نجم', createdAt: new Date().toISOString() },
   { id: '15', sonName: 'اواب', fatherName: 'مهدى', grandfatherName: 'نجم', greatGrandfatherName: '', createdAt: new Date().toISOString() },
+  { id: '16', sonName: 'عرفان', fatherName: 'صالح مهدي', grandfatherName: 'مهدي', greatGrandfatherName: '', createdAt: new Date().toISOString() },
+  { id: '17', sonName: 'صالح', fatherName: 'مهدي', grandfatherName: 'صالح', greatGrandfatherName: '', createdAt: new Date().toISOString() },
 ];
 
 export function cleanName(name: string): string {
@@ -84,17 +86,17 @@ export function buildFamilyTree(entries: RelationEntry[]): {
     roots.push(allPersons[0]);
   }
 
-  // Build recursive tree with depth tracking
-  function buildNode(name: string, currentGen: number, path: Set<string>): FamilyMember {
-    const newPath = new Set(path);
-    newPath.add(name);
+  // Build recursive tree allowing same names across different branches with dynamic leaf count calculation
+  function buildNode(name: string, currentGen: number, ancestorChain: string[]): FamilyMember {
+    const newAncestorChain = [...ancestorChain, name];
 
     const sonNames = childrenMap.get(name) || new Set<string>();
     const children: FamilyMember[] = [];
 
     sonNames.forEach(sonName => {
-      if (!newPath.has(sonName)) {
-        children.push(buildNode(sonName, currentGen + 1, newPath));
+      // Prevent infinite loops only if this exact person is an ancestor in the direct line
+      if (!ancestorChain.includes(sonName)) {
+        children.push(buildNode(sonName, currentGen + 1, newAncestorChain));
       }
     });
 
@@ -106,7 +108,7 @@ export function buildFamilyTree(entries: RelationEntry[]): {
     };
   }
 
-  const rootMembers: FamilyMember[] = roots.map(rootName => buildNode(rootName, 1, new Set()));
+  const rootMembers: FamilyMember[] = roots.map(rootName => buildNode(rootName, 1, []));
 
   // Calculate stats per generation
   const genMap = new Map<number, number>();

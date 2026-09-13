@@ -19,6 +19,7 @@ interface FamilyTreeViewerProps {
   onSwitchToEntries: () => void;
   settings: TreeSettings;
   setSettings: React.Dispatch<React.SetStateAction<TreeSettings>>;
+  onAddChild: (fatherName: string, sonName: string) => void;
 }
 
 export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
@@ -26,7 +27,8 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   entries,
   onSwitchToEntries,
   settings,
-  setSettings
+  setSettings,
+  onAddChild
 }) => {
   const [zoom, setZoom] = useState<number>(1.0); // Standard starting at 100%
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -132,7 +134,8 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   };
 
   const checkIsSheikh = (name: string): boolean => {
-    return getMemberTags(name).includes('شيخ');
+    const clean = name.trim();
+    return clean.includes('ناصر') || clean.includes('الشيخ ناصر') || getMemberTags(name).includes('شيخ');
   };
   const checkIsProfessor = (name: string): boolean => {
     const tags = getMemberTags(name);
@@ -210,21 +213,24 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     const nodeGreenFill = getGenerationGreen(level, isHighlighted);
     const yOffset = generationOrder === 'ascending' ? 145 : -145;
 
-    // Standard fixed sizes without auto-sizing
-    const sheikhRadius = 48;
-    const ellipseRx = 56;
-    const rectWidth = 112;
+    // Dynamic auto-sizing based on name length
+    const nameLength = member.name.length;
+    const dynamicRx = Math.max(56, nameLength * 8.5);
+    const dynamicSheikhRadius = Math.max(48, nameLength * 7.5);
+    const dynamicRectWidth = Math.max(112, nameLength * 14);
 
     return (
       <g key={`${member.name}-${level}-${x}-${y}`}>
         {/* Organic or geometric branching */}
         {hasChildren && member.children.map((child, idx) => {
+          // Dynamic spread based on children count and depth level to prevent overlapping
+          const childSpread = Math.max(spread * 0.75, 260 + (numChildren * 35));
           const spreadFactor = numChildren === 1 ? 0 : (idx - (numChildren - 1) / 2);
-          const childX = x + spreadFactor * Math.max(spread, 220);
+          const childX = x + spreadFactor * childSpread;
           const childY = y + yOffset; // Vertical distance between generations based on order
 
           return (
-            <g key={`branch-${member.name}-${child.name}-${idx}`}>
+            <g key={`branch-${member.name}-${child.name}-${idx}`} className="transition-all duration-500 ease-in-out">
               <path
                 d={getBranchPath(x, y, childX, childY, spreadFactor)}
                 fill="none"
@@ -232,8 +238,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 strokeWidth={Math.max(2, (settings.lineThickness || 3) - level * 0.3)}
                 strokeLinecap="round"
                 opacity="0.92"
+                className="transition-all duration-500 ease-in-out"
               />
-              {renderSubTreeSVG(child, childX, childY, spread * 0.75, level + 1)}
+              {renderSubTreeSVG(child, childX, childY, childSpread, level + 1)}
             </g>
           );
         })}
@@ -245,7 +252,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             e.stopPropagation();
             setSelectedPerson(member.name);
           }}
-          style={{ cursor: 'pointer' }}
+          style={{ cursor: 'pointer', transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
         >
           {isSheikh ? (
             /* Perfectly circular ornate frame ONLY for Sheikh with dynamic auto-fit radius */
@@ -253,7 +260,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               <circle
                 cx="0"
                 cy="0"
-                r={sheikhRadius}
+                r={dynamicSheikhRadius}
                 fill={nodeGreenFill}
                 stroke={nodeStroke}
                 strokeWidth="4"
@@ -262,7 +269,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               <circle
                 cx="0"
                 cy="0"
-                r={sheikhRadius - 6}
+                r={dynamicSheikhRadius - 6}
                 fill="none"
                 stroke="#fef08a"
                 strokeWidth="2"
@@ -272,7 +279,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               <circle
                 cx="0"
                 cy="0"
-                r={sheikhRadius - 12}
+                r={dynamicSheikhRadius - 12}
                 fill="none"
                 stroke={nodeStroke}
                 strokeWidth="1"
@@ -283,7 +290,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <ellipse
               cx="0"
               cy="0"
-              rx={ellipseRx}
+              rx={dynamicRx}
               ry="27"
               fill={nodeGreenFill}
               stroke={nodeStroke}
@@ -292,9 +299,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             />
           ) : (
             <rect
-              x={-rectWidth / 2}
+              x={-dynamicRectWidth / 2}
               y="-20"
-              width={rectWidth}
+              width={dynamicRectWidth}
               height="40"
               rx="10"
               fill={nodeGreenFill}
@@ -316,6 +323,24 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           >
             {member.name}
           </text>
+
+          {/* Plus button badge appearing when node is selected */}
+          {selectedPerson === member.name && (
+            <g 
+              transform={`translate(${dynamicRx - 10}, -30)`}
+              onClick={(e) => {
+                e.stopPropagation();
+                const newSonName = prompt(`إضافة ابن جديد لـ (${member.name}):`, `ابن ${member.name}`);
+                if (newSonName && newSonName.trim()) {
+                  onAddChild(member.name, newSonName.trim());
+                }
+              }}
+              style={{ cursor: 'pointer' }}
+            >
+              <circle cx="0" cy="0" r="14" fill="#b89753" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
+              <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">+</text>
+            </g>
+          )}
         </g>
       </g>
     );
@@ -612,11 +637,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               </text>
             )}
           </svg>
-        </div>
-
-        <div className="absolute bottom-4 right-4 bg-[#1e1915]/90 backdrop-blur-md text-[#fcf8f2] px-4 py-2 rounded-xl text-xs border border-amber-500/30 shadow-lg flex items-center gap-2 pointer-events-none">
-          <Sparkles className="w-4 h-4 text-amber-400" />
-          <span>الاحتواء التلقائي للأسماء الطويلة • حجم قياسي 100%</span>
         </div>
       </div>
 
