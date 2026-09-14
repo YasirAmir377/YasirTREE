@@ -165,10 +165,14 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [isExportingHD, setIsExportingHD] = useState<boolean>(false);
 
-  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.15, 2.5));
+  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.15, 3.0));
   const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.15, 0.3));
   const handleResetZoom = () => {
     setZoom(1.0); // Reset to standard 100%
+  };
+  const handleCenterView = () => {
+    setZoom(1.0);
+    setNodeOffsets({});
   };
 
   const handleExportSVG = () => {
@@ -754,6 +758,35 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
         }}
       >
         <div className="absolute inset-3 border-2 border-dashed border-[#b89753]/30 pointer-events-none rounded-xl z-10" />
+
+        {/* Floating Zoom & Center Controls Overlay */}
+        <div className="absolute bottom-6 left-6 z-20 flex flex-col gap-2 bg-[#fcf8f2]/90 dark:bg-[#1e1915]/90 backdrop-blur-md p-2 rounded-2xl border border-amber-300/60 dark:border-stone-700 shadow-xl">
+          <button 
+            onClick={handleZoomIn} 
+            className="p-2.5 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl transition-all shadow cursor-pointer flex items-center justify-center"
+            title="تكبير (Zoom In)"
+          >
+            <ZoomIn className="w-5 h-5" />
+          </button>
+          <div className="text-center font-mono text-xs font-bold text-stone-700 dark:text-stone-300 py-0.5">
+            {Math.round(zoom * 100)}%
+          </div>
+          <button 
+            onClick={handleZoomOut} 
+            className="p-2.5 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 rounded-xl transition-all shadow cursor-pointer flex items-center justify-center"
+            title="تصغير (Zoom Out)"
+          >
+            <ZoomOut className="w-5 h-5" />
+          </button>
+          <div className="h-[1px] bg-stone-300 dark:bg-stone-700 my-0.5" />
+          <button 
+            onClick={handleCenterView} 
+            className="p-2.5 bg-amber-700 hover:bg-amber-800 text-white rounded-xl transition-all shadow cursor-pointer flex items-center justify-center"
+            title="توسيط الشجرة"
+          >
+            <RotateCcw className="w-5 h-5" />
+          </button>
+        </div>
 
         <div 
           className="w-full h-full flex items-center justify-center transition-transform duration-75 origin-center"
