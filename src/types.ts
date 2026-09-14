@@ -9,6 +9,7 @@ export interface RelationEntry {
 }
 
 export interface FamilyMember {
+  uniqueId: string;
   name: string;
   children: FamilyMember[];
   generation: number;
@@ -31,4 +32,7 @@ export interface TreeSettings {
   nameFontSizeScale?: number;
   branchStyle?: 'curved' | 'straight' | 'geometric';
   generationOrder?: 'ascending' | 'descending';
+  verticalSpacingMode?: 'normal' | 'extended' | 'super_extended';
+  branchColoring?: 'default' | 'branch_groups' | 'custom';
+  branchCustomColors?: Record<string, string>; // branch root name -> hex color
 }

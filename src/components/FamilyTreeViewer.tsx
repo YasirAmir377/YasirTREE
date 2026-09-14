@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { FamilyMember, TreeSettings, RelationEntry } from '../types';
 import { 
   ZoomIn, ZoomOut, RotateCcw, Download, 
-  Search, Sliders, Sparkles, ChevronDown, ChevronUp, FileText, Printer, ArrowUpDown 
+  Search, Sliders, Sparkles, ChevronDown, ChevronUp, FileText, Printer, ArrowUpDown, LayoutGrid 
 } from 'lucide-react';
 
 interface FamilyTreeViewerProps {
@@ -33,8 +33,11 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   onDeleteNode
 }) => {
   const [showAddChildModal, setShowAddChildModal] = useState<boolean>(false);
+  const [showAddParentModal, setShowAddParentModal] = useState<boolean>(false);
   const [addingFatherName, setAddingFatherName] = useState<string>('');
+  const [targetPersonName, setTargetPersonName] = useState<string>('');
   const [newChildName, setNewChildName] = useState<string>('');
+  const [newParentName, setNewParentName] = useState<string>('');
   const [selectedChildTags, setSelectedChildTags] = useState<string[]>([]);
 
   const AVAILABLE_TAG_OPTIONS = ['شهيد', 'طبيب', 'ضابط', 'شيخ', 'تدريسي', 'معلم', 'متوفي'];
@@ -46,6 +49,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     setShowAddChildModal(true);
   };
 
+  const handleOpenAddParentModal = (personName: string) => {
+    setTargetPersonName(personName);
+    setNewParentName('');
+    setShowAddParentModal(true);
+  };
+
   const handleConfirmAddChild = (e: React.FormEvent) => {
     e.preventDefault();
     if (newChildName.trim() && addingFatherName) {
@@ -53,12 +62,105 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       setShowAddChildModal(false);
     }
   };
+
+  const handleConfirmAddParent = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newParentName.trim() && targetPersonName) {
+      // Adding a parent (grandpa/father) above this person: newParentName is father of targetPersonName
+      onAddChild(newParentName.trim(), targetPersonName, []);
+      setShowAddParentModal(false);
+    }
+  };
+  const [nodeOffsets, setNodeOffsets] = useState<Record<string, { x: number; y: number }>>({});
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
+  const [nodeDragStart, setNodeDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const handleNodeMouseDown = (e: React.MouseEvent, uniqueId: string) => {
+    e.stopPropagation();
+    setDraggingNodeId(uniqueId);
+    const current = nodeOffsets[uniqueId] || { x: 0, y: 0 };
+    setNodeDragStart({ x: e.clientX - current.x, y: e.clientY - current.y });
+  };
+
+  const handleNodeMouseMove = (e: React.MouseEvent) => {
+    if (!draggingNodeId) return;
+    const newX = e.clientX - nodeDragStart.x;
+    const newY = e.clientY - nodeDragStart.y;
+    setNodeOffsets(prev => ({
+      ...prev,
+      [draggingNodeId]: { x: newX, y: newY }
+    }));
+  };
+
+  const handleNodeMouseUp = () => {
+    setDraggingNodeId(null);
+  };
+
+  const handleNodeTouchStart = (e: React.TouchEvent, uniqueId: string) => {
+    if (e.touches.length === 1) {
+      e.stopPropagation();
+      setDraggingNodeId(uniqueId);
+      const current = nodeOffsets[uniqueId] || { x: 0, y: 0 };
+      setNodeDragStart({ x: e.touches[0].clientX - current.x, y: e.touches[0].clientY - current.y });
+    }
+  };
+
+  const handleNodeTouchMove = (e: React.TouchEvent) => {
+    if (!draggingNodeId || e.touches.length !== 1) return;
+    const newX = e.touches[0].clientX - nodeDragStart.x;
+    const newY = e.touches[0].clientY - nodeDragStart.y;
+    setNodeOffsets(prev => ({
+      ...prev,
+      [draggingNodeId]: { x: newX, y: newY }
+    }));
+  };
+
+  const handleNodeTouchEnd = () => {
+    setDraggingNodeId(null);
+  };
+
+  const handleAutoLayout = () => {
+    setNodeOffsets({});
+    setZoom(1.0);
+  };
   const [zoom, setZoom] = useState<number>(1.0); // Standard starting at 100%
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState<boolean>(false);
-  const [dragStart, setDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [pan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [initialPinchDist, setInitialPinchDist] = useState<number | null>(null);
+  const [initialZoomOnPinch, setInitialZoomOnPinch] = useState<number>(1.0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      setInitialPinchDist(dist);
+      setInitialZoomOnPinch(zoom);
+    } else {
+      setInitialPinchDist(null);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && initialPinchDist !== null) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const scaleFactor = dist / initialPinchDist;
+      const newZoom = Math.min(Math.max(initialZoomOnPinch * scaleFactor, 0.3), 3.5);
+      setZoom(newZoom);
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (e.touches.length < 2) {
+      setInitialPinchDist(null);
+    }
+  };
+
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedPerson, setSelectedPerson] = useState<string | null>(null);
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(null); // stores uniqueId
   const [showSettingsPanel, setShowSettingsPanel] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [isExportingHD, setIsExportingHD] = useState<boolean>(false);
@@ -67,7 +169,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.15, 0.3));
   const handleResetZoom = () => {
     setZoom(1.0); // Reset to standard 100%
-    setPan({ x: 0, y: 0 });
   };
 
   const handleExportSVG = () => {
@@ -108,8 +209,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           setIsExportingHD(false);
           return;
         }
-
-        context.fillStyle = '#fcf7ee';
+        context.fillStyle = '#f7f1e3';
         context.fillRect(0, 0, canvas.width, canvas.height);
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
@@ -191,24 +291,31 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   };
 
   const getTextFill = (name: string): string => {
-    if (checkIsMartyr(name)) return '#ff4d4d'; // الشهيد: لون اسمه أحمر
     return '#ffffff';
   };
 
-  const getBranchPath = (x: number, y: number, childX: number, childY: number, spreadFactor: number) => {
+  const getBranchPath = (parentId: string, childId: string, x: number, y: number, childX: number, childY: number, spreadFactor: number) => {
+    const parentOffset = nodeOffsets[parentId] || { x: 0, y: 0 };
+    const childOffset = nodeOffsets[childId] || { x: 0, y: 0 };
+
+    const actualX = x + parentOffset.x;
+    const actualY = y + parentOffset.y;
+    const actualChildX = childX + childOffset.x;
+    const actualChildY = childY + childOffset.y;
+
     const startYOffset = generationOrder === 'ascending' ? 15 : -15;
     const endYOffset = generationOrder === 'ascending' ? -15 : 15;
 
     if (branchStyle === 'straight') {
-      return `M ${x} ${y + startYOffset} L ${childX} ${childY + endYOffset}`;
+      return `M ${actualX} ${actualY + startYOffset} L ${actualChildX} ${actualChildY + endYOffset}`;
     }
     if (branchStyle === 'geometric') {
-      const midY = (y + childY) / 2;
-      return `M ${x} ${y + startYOffset} L ${x} ${midY} L ${childX} ${midY} L ${childX} ${childY + endYOffset}`;
+      const midY = (actualY + actualChildY) / 2;
+      return `M ${actualX} ${actualY + startYOffset} L ${actualX} ${midY} L ${actualChildX} ${midY} L ${actualChildX} ${actualChildY + endYOffset}`;
     }
     // Default curved
     const ctrlOffset = generationOrder === 'ascending' ? 80 : -80;
-    return `M ${x} ${y + startYOffset} C ${x + spreadFactor * 35} ${y + ctrlOffset}, ${childX} ${childY - ctrlOffset}, ${childX} ${childY + endYOffset}`;
+    return `M ${actualX} ${actualY + startYOffset} C ${actualX + spreadFactor * 35} ${actualY + ctrlOffset}, ${actualChildX} ${actualChildY - ctrlOffset}, ${actualChildX} ${actualChildY + endYOffset}`;
   };
 
   // Organic recursive tree renderer matching the reference heritage poster design
@@ -227,14 +334,28 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   };
 
   const renderSubTreeSVG = (member: FamilyMember, x: number, y: number, spread: number, level: number): React.ReactNode => {
-    const isHighlighted = selectedPerson === member.name || (searchQuery && member.name.includes(searchQuery));
+    const isHighlighted = selectedPerson === member.uniqueId || (searchQuery && member.name.includes(searchQuery));
     const hasChildren = member.children && member.children.length > 0;
     const numChildren = member.children.length;
     const isSheikh = checkIsSheikh(member.name);
     const nodeStroke = getNodeStroke(member.name, isSheikh);
     const textFill = getTextFill(member.name);
-    const nodeGreenFill = getGenerationGreen(level, isHighlighted);
-    const yOffset = generationOrder === 'ascending' ? 145 : -145;
+    const verticalMode = settings.verticalSpacingMode || 'normal';
+    let spacingMultiplier = 1.0;
+    if (verticalMode === 'extended') spacingMultiplier = 1.5;
+    if (verticalMode === 'super_extended') spacingMultiplier = 2.2;
+
+    const yOffset = (generationOrder === 'ascending' ? 145 : -145) * spacingMultiplier;
+
+    // Branch coloring logic
+    const branchColoring = settings.branchColoring || 'default';
+    let nodeGreenFill = getGenerationGreen(level, isHighlighted);
+    if (branchColoring === 'branch_groups' && !isHighlighted) {
+      // Color by main branch index or hash
+      const branchColors = ['#1e3a8a', '#b91c1c', '#047857', '#b45309', '#6d28d9', '#0e7490'];
+      const hash = member.name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      nodeGreenFill = branchColors[hash % branchColors.length];
+    }
 
     // Dynamic auto-sizing based on name length
     const nameLength = member.name.length;
@@ -243,7 +364,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     const dynamicRectWidth = Math.max(112, nameLength * 14);
 
     return (
-      <g key={`${member.name}-${level}-${x}-${y}`}>
+      <g key={`${member.uniqueId}-${level}-${x}-${y}`}>
         {/* Organic or geometric branching */}
         {hasChildren && member.children.map((child, idx) => {
           // Robust child spread scaling with child count and name widths to prevent any overlapping
@@ -254,9 +375,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           const childY = y + yOffset; // Vertical distance between generations based on order
 
           return (
-            <g key={`branch-${member.name}-${child.name}-${idx}`} className="transition-all duration-500 ease-in-out">
+            <g key={`branch-${member.uniqueId}-${child.uniqueId}-${idx}`} className="transition-all duration-500 ease-in-out">
               <path
-                d={getBranchPath(x, y, childX, childY, spreadFactor)}
+                d={getBranchPath(member.uniqueId, child.uniqueId, x, y, childX, childY, spreadFactor)}
                 fill="none"
                 stroke="#5c3a21"
                 strokeWidth={Math.max(2, (settings.lineThickness || 3) - level * 0.3)}
@@ -271,12 +392,14 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
         {/* Member Leaf / Node with Auto-Sizing */}
         <g 
-          transform={`translate(${x}, ${y})`}
+          transform={`translate(${x + (nodeOffsets[member.uniqueId]?.x || 0)}, ${y + (nodeOffsets[member.uniqueId]?.y || 0)})`}
           onClick={(e) => {
             e.stopPropagation();
-            setSelectedPerson(member.name);
+            setSelectedPerson(member.uniqueId);
           }}
-          style={{ cursor: 'pointer', transition: 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
+          onMouseDown={(e) => handleNodeMouseDown(e, member.uniqueId)}
+          onTouchStart={(e) => handleNodeTouchStart(e, member.uniqueId)}
+          style={{ cursor: 'grab', transition: draggingNodeId === member.uniqueId ? 'none' : 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
         >
           {isSheikh ? (
             /* Perfectly circular ornate frame ONLY for Sheikh with dynamic auto-fit radius */
@@ -348,26 +471,40 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             {member.name}
           </text>
 
-          {/* Plus (+) button badge on one side and Delete (x) button on the other when node is selected */}
-          {selectedPerson === member.name && (
+          {/* Plus (+) button at the bottom and Delete (x) button at the top */}
+          {selectedPerson === member.uniqueId && (
             <>
-              {/* Plus (+) button */}
+              {/* Plus (+) button at the bottom center */}
               <g 
-                transform={`translate(${dynamicRx - 10}, -30)`}
+                transform={`translate(0, ${isSheikh ? dynamicSheikhRadius + 14 : 32})`}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleOpenAddModal(member.name);
                 }}
                 style={{ cursor: 'pointer' }}
-                title="إضافة ابن جديد"
+                title="إضافة ابن جديد تحت هذا الشخص"
               >
                 <circle cx="0" cy="0" r="14" fill="#b89753" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
                 <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">+</text>
               </g>
 
-              {/* Delete (x) button on the opposite side */}
+              {/* Plus (+) button at the top center to add a father/grandfather above */}
               <g 
-                transform={`translate(-${dynamicRx - 10}, -30)`}
+                transform={`translate(0, ${isSheikh ? -(dynamicSheikhRadius + 14) : -32})`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleOpenAddParentModal(member.name);
+                }}
+                style={{ cursor: 'pointer' }}
+                title="إضافة أب أو جد أعلى هذا الشخص"
+              >
+                <circle cx="0" cy="0" r="14" fill="#1b4d2e" stroke="#ffffff" strokeWidth="2" className="hover:scale-110 transition-transform shadow-lg" />
+                <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">+</text>
+              </g>
+
+              {/* Delete (x) button on the side */}
+              <g 
+                transform={`translate(${dynamicRx - 10}, -30)`}
                 onClick={(e) => {
                   e.stopPropagation();
                   onDeleteNode(member.name);
@@ -442,14 +579,27 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">ترتيب الأجيال</label>
+            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">الامتداد الطولي للشجرة</label>
             <select
-              value={generationOrder}
-              onChange={e => setSettings(prev => ({ ...prev, generationOrder: e.target.value as 'descending' | 'ascending' }))}
+              value={settings.verticalSpacingMode || 'normal'}
+              onChange={e => setSettings(prev => ({ ...prev, verticalSpacingMode: e.target.value as 'normal' | 'extended' | 'super_extended' }))}
               className="w-full px-3 py-1.5 bg-white dark:bg-[#15110e] border border-stone-300 dark:border-stone-700 rounded-lg text-xs font-medium"
             >
-              <option value="descending">الترتيب التنازلي (الأصل بالأسفل)</option>
-              <option value="ascending">الترتيب التصاعدي (الأصل بالأعلى)</option>
+              <option value="normal">عادي (متوازن)</option>
+              <option value="extended">طولي ممتد (مسافات واسعة)</option>
+              <option value="super_extended">طولي جداً (متباعد للغاية لمنع التداخل)</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">تصنيف الدوائر والألوان</label>
+            <select
+              value={settings.branchColoring || 'default'}
+              onChange={e => setSettings(prev => ({ ...prev, branchColoring: e.target.value as 'default' | 'branch_groups' | 'custom' }))}
+              className="w-full px-3 py-1.5 bg-white dark:bg-[#15110e] border border-stone-300 dark:border-stone-700 rounded-lg text-xs font-medium"
+            >
+              <option value="default">ألوان الأجيال التراثية (تدرجات الأخضر)</option>
+              <option value="branch_groups">تصنيف الفروع بألوان مميزة (لكل فرع لون)</option>
             </select>
           </div>
 
@@ -574,6 +724,10 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <button onClick={handleResetZoom} className="p-2 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="إعادة التعيين لـ 100%">
               <RotateCcw className="w-4 h-4" />
             </button>
+            <button onClick={handleAutoLayout} className="flex items-center gap-1.5 bg-[#5c3a21] hover:bg-[#4a2e1a] text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer" title="إعادة ترتيب الشجرة تلقائياً ومنع التداخل">
+              <LayoutGrid className="w-4 h-4" />
+              <span>إعادة ترتيب تلقائي</span>
+            </button>
             <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-800 text-white px-4 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer">
               <Download className="w-4 h-4" />
               <span>تصدير أعلى دقة / PDF</span>
@@ -584,15 +738,27 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
       {/* Main Heritage Family Tree SVG Canvas Container (3000 x 2200) */}
       <div 
-        className="relative bg-[#f7f1e3] dark:bg-[#181410] border-4 border-[#d4af37]/40 rounded-2xl shadow-2xl overflow-hidden cursor-default select-none"
+        className="relative bg-[#f7f1e3] dark:bg-[#181410] border-4 border-[#d4af37]/40 rounded-2xl shadow-2xl overflow-hidden select-none"
         style={{ minHeight: '750px', height: '84vh' }}
+        onMouseMove={handleNodeMouseMove}
+        onMouseUp={handleNodeMouseUp}
+        onMouseLeave={handleNodeMouseUp}
+        onTouchStart={handleTouchStart}
+        onTouchMove={(e) => {
+          handleTouchMove(e);
+          handleNodeTouchMove(e);
+        }}
+        onTouchEnd={(e) => {
+          handleTouchEnd(e);
+          handleNodeTouchEnd();
+        }}
       >
         <div className="absolute inset-3 border-2 border-dashed border-[#b89753]/30 pointer-events-none rounded-xl z-10" />
 
         <div 
-          className="w-full h-full flex items-center justify-center transition-transform duration-100 origin-center"
+          className="w-full h-full flex items-center justify-center transition-transform duration-75 origin-center"
           style={{
-            transform: `translate(0px, 0px) scale(${zoom})`
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`
           }}
         >
           <svg
@@ -671,9 +837,22 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 })}
               </g>
             ) : (
-              <text x="1500" y="1100" textAnchor="middle" fill="#8c7355" fontSize="20" fontFamily={`'${currentFont}', sans-serif`}>
-                لا توجد سجلات. قم بإضافة تسلسل العائلة من جدول الإدخالات.
-              </text>
+              <g transform="translate(1500, 1100)">
+                <circle
+                  cx="0"
+                  cy="-40"
+                  r="45"
+                  fill="#1b4d2e"
+                  stroke="#d4af37"
+                  strokeWidth="3"
+                  className="cursor-pointer hover:scale-110 transition-transform shadow-2xl"
+                  onClick={() => handleOpenAddParentModal('الجذر الرئيسي')}
+                />
+                <text x="0" y="-32" textAnchor="middle" fill="#ffffff" fontSize="42" fontWeight="bold" className="cursor-pointer pointer-events-none">+</text>
+                <text x="0" y="30" textAnchor="middle" fill="#5c3a21" fontSize="22" fontFamily={`'${currentFont}', sans-serif`} fontWeight="bold">
+                  انقر على علامة (+) لإضافة أول جد أو مؤسس للشجرة
+                </text>
+              </g>
             )}
           </svg>
         </div>
@@ -737,7 +916,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               إضافة ابن جديد لـ ({addingFatherName})
             </h3>
             <p className="text-xs text-stone-600 dark:text-stone-300">
-              أدخل اسم الفرد الجديد واختر الصفات والمناصب (مثل: شهيد، طبيب، ضابط، شيخ، إلخ):
+              أدخل اسم الفرد الجديد واختر الصفات والمهن:
             </p>
 
             <form onSubmit={handleConfirmAddChild} className="space-y-4">
@@ -794,6 +973,51 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   className="px-5 py-2 bg-amber-800 hover:bg-amber-900 text-amber-100 rounded-xl text-xs font-bold transition-all cursor-pointer shadow"
                 >
                   إضافة للشجرة
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Parent/Ancestor Modal */}
+      {showAddParentModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-[#fcf8f2] dark:bg-[#1e1915] border border-amber-300 dark:border-[#483d31] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <h3 className="text-xl font-bold font-amiri text-amber-950 dark:text-amber-100">
+              إضافة أب أو جد أعلى لـ ({targetPersonName})
+            </h3>
+            <p className="text-xs text-stone-600 dark:text-stone-300">
+              أدخل اسم الوالد أو الجد الأكبر ليتم ربطه مباشرة فوق هذا الشخص:
+            </p>
+
+            <form onSubmit={handleConfirmAddParent} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-stone-700 dark:text-stone-300 mb-1">اسم الأب أو الجد (الأعلى):</label>
+                <input 
+                  type="text"
+                  value={newParentName}
+                  onChange={(e) => setNewParentName(e.target.value)}
+                  placeholder="مثال: نجم أو محمد"
+                  autoFocus
+                  required
+                  className="w-full px-3 py-2 bg-white dark:bg-stone-900 border border-amber-200 dark:border-stone-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-amber-200 dark:border-stone-700">
+                <button
+                  type="button"
+                  onClick={() => setShowAddParentModal(false)}
+                  className="px-4 py-2 bg-stone-300 dark:bg-stone-700 text-stone-800 dark:text-stone-200 rounded-xl text-xs font-medium cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-800 hover:bg-emerald-900 text-emerald-100 rounded-xl text-xs font-bold transition-all cursor-pointer shadow"
+                >
+                  إضافة أب أعلى
                 </button>
               </div>
             </form>

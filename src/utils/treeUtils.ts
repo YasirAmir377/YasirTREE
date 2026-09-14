@@ -100,7 +100,10 @@ export function buildFamilyTree(entries: RelationEntry[]): {
       }
     });
 
+    const uniqueId = `${name}-${ancestorChain.join('-')}-${currentGen}-${Math.random().toString(36).substring(2, 6)}`;
+
     return {
+      uniqueId,
       name,
       children,
       generation: currentGen,
