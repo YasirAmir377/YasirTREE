@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { ViewMode } from '../types';
-import { TreePine, Table, Download, Sparkles } from 'lucide-react';
+import { TreePine, Table, Upload, Download, Sparkles } from 'lucide-react';
 
 interface NavbarProps {
   activeTab: ViewMode;
   setActiveTab: (tab: ViewMode) => void;
   onExportClick: () => void;
   onResetData: () => void;
+  onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
   totalPersons: number;
   totalRelations: number;
 }
@@ -16,11 +17,21 @@ export const Navbar: React.FC<NavbarProps> = ({
   setActiveTab,
   onExportClick,
   onResetData,
+  onImportJson,
   totalPersons,
   totalRelations
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   return (
     <header className="bg-[#1e1915] text-[#fcf8f2] border-b border-[#3d3328] shadow-lg sticky top-0 z-50 no-print">
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".json"
+        className="hidden"
+        onChange={onImportJson}
+      />
       <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col md:flex-row items-center justify-between gap-4">
         {/* Brand & Logo */}
         <div className="flex items-center gap-3">
@@ -64,6 +75,15 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Quick Actions */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 bg-emerald-800 hover:bg-emerald-900 text-emerald-100 text-xs font-semibold px-3.5 py-2 rounded-xl border border-emerald-600 transition-all cursor-pointer shadow"
+            title="استيراد ملف JSON لتعبئة الشجرة فورياً"
+          >
+            <Upload className="w-4 h-4 text-emerald-300" />
+            <span>استيراد JSON</span>
+          </button>
+
           <div className="hidden lg:flex items-center gap-3 text-xs text-stone-300 bg-[#2a231d] px-3 py-1.5 rounded-lg border border-[#483d31]">
             <span>الأفراد: <strong className="text-amber-300">{totalPersons}</strong></span>
             <span className="text-stone-500">|</span>

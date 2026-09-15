@@ -154,6 +154,53 @@ export default function App() {
     }
   };
 
+  const handleJsonImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+          alert('خطأ في استيراد ملف JSON: يجب أن يكون الملف محتوياً على مصفوفة (Array) من العلاقات.');
+          return;
+        }
+        const normalized: RelationEntry[] = parsed.map((item: any, idx: number) => {
+          const son = item.sonName || item.son || item.child || item.name;
+          const father = item.fatherName || item.father || item.parent;
+          if (!son && !father) {
+            throw new Error(`العنصر رقم ${idx + 1} لا يحتوي على اسم الابن أو الأب.`);
+          }
+          return {
+            id: item.id ? String(item.id) : `json-${Date.now()}-${idx}`,
+            sonName: String(son || '').trim(),
+            fatherName: String(father || '').trim(),
+            grandfatherName: item.grandfatherName ? String(item.grandfatherName).trim() : undefined,
+            greatGrandfatherName: item.greatGrandfatherName ? String(item.greatGrandfatherName).trim() : undefined,
+            tags: Array.isArray(item.tags) ? item.tags : [],
+            createdAt: item.createdAt || new Date().toISOString()
+          };
+        }).filter(e => e.sonName || e.fatherName);
+
+        if (normalized.length === 0) {
+          alert('لم يتم العثور على أي علاقات صحيحة في ملف JSON المستورد.');
+          return;
+        }
+
+        if (window.confirm(`تم العثور على ${normalized.length} علاقة في ملف JSON. هل تريد استبدال البيانات الحالية بها؟`)) {
+          setEntries(normalized);
+          alert('تم استيراد شجرة العائلة بنجاح وتحديث البيانات فورياً!');
+        }
+      } catch (err: any) {
+        console.error('JSON Import Error:', err);
+        alert(`حدث خطأ أثناء تحليل ملف JSON: تأكد من صحة تنسيق الملف وبنيته.\nتفاصيل الخطأ: ${err.message || 'خطأ غير معروف'}`);
+      }
+      if (e.target) e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
+
   return (
     <div className="min-h-screen heritage-pattern flex flex-col text-stone-800 dark:text-stone-100">
       {/* Top Navbar */}
@@ -162,6 +209,7 @@ export default function App() {
         setActiveTab={setActiveTab}
         onExportClick={() => setActiveTab('tree')}
         onResetData={handleResetData}
+        onImportJson={handleJsonImportFile}
         totalPersons={treeData.allPersons.length}
         totalRelations={treeData.totalRelations}
       />
@@ -182,6 +230,7 @@ export default function App() {
           <FamilyTreeViewer
             treeData={treeData}
             entries={entries}
+            setEntries={setEntries}
             onSwitchToEntries={() => setActiveTab('entries')}
             settings={settings}
             setSettings={setSettings}

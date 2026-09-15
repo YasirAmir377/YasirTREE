@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { RelationEntry } from '../types';
 import { exportToCSV, cleanName } from '../utils/treeUtils';
 import { auth, db } from '../lib/firebase';
@@ -25,6 +25,54 @@ export const EntriesTable: React.FC<EntriesTableProps> = ({
   onSwitchToTree,
   onResetData
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleJsonImportFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+          alert('خطأ في استيراد ملف JSON: يجب أن يكون الملف محتوياً على مصفوفة (Array) من العلاقات.');
+          return;
+        }
+        const normalized: RelationEntry[] = parsed.map((item: any, idx: number) => {
+          const son = item.sonName || item.son || item.child || item.name;
+          const father = item.fatherName || item.father || item.parent;
+          if (!son && !father) {
+            throw new Error(`العنصر رقم ${idx + 1} لا يحتوي على اسم الابن أو الأب.`);
+          }
+          return {
+            id: item.id ? String(item.id) : `json-${Date.now()}-${idx}`,
+            sonName: String(son || '').trim(),
+            fatherName: String(father || '').trim(),
+            grandfatherName: item.grandfatherName ? String(item.grandfatherName).trim() : undefined,
+            greatGrandfatherName: item.greatGrandfatherName ? String(item.greatGrandfatherName).trim() : undefined,
+            tags: Array.isArray(item.tags) ? item.tags : [],
+            createdAt: item.createdAt || new Date().toISOString()
+          };
+        }).filter(e => e.sonName || e.fatherName);
+
+        if (normalized.length === 0) {
+          alert('لم يتم العثور على أي علاقات صحيحة في ملف JSON المستورد.');
+          return;
+        }
+
+        if (window.confirm(`تم العثور على ${normalized.length} علاقة في ملف JSON. هل تريد استبدال البيانات الحالية بها؟`)) {
+          setEntries(normalized);
+          alert('تم استيراد شجرة العائلة بنجاح وتحديث البيانات فورياً!');
+        }
+      } catch (err: any) {
+        console.error('JSON Import Error:', err);
+        alert(`حدث خطأ أثناء تحليل ملف JSON: تأكد من صحة تنسيق الملف وبنيته.\nتفاصيل الخطأ: ${err.message || 'خطأ غير معروف'}`);
+      }
+      if (e.target) e.target.value = '';
+    };
+    reader.readAsText(file);
+  };
   const [searchTerm, setSearchTerm] = useState('');
   const [sortField, setSortField] = useState<'id' | 'sonName' | 'fatherName'>('id');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -230,6 +278,13 @@ export const EntriesTable: React.FC<EntriesTableProps> = ({
 
   return (
     <div className="space-y-6">
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".json"
+        className="hidden"
+        onChange={handleJsonImportFile}
+      />
       {/* Top Banner */}
       <div className="bg-[#f5ecdc] dark:bg-[#25201b] border border-[#e2d2b5] dark:border-[#3d3328] rounded-2xl p-6 shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
         <div>
@@ -271,6 +326,15 @@ export const EntriesTable: React.FC<EntriesTableProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex items-center gap-1.5 bg-emerald-800 hover:bg-emerald-900 text-emerald-100 px-3.5 py-2 rounded-lg text-xs font-semibold border border-emerald-600 transition-all cursor-pointer shadow"
+            title="استيراد ملف JSON لتعبئة الشجرة فورياً"
+          >
+            <Upload className="w-4 h-4 text-emerald-300" />
+            <span>استيراد JSON</span>
+          </button>
+
           <button
             onClick={() => setShowPasteModal(true)}
             className="flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/40 text-amber-900 dark:text-amber-200 border border-amber-300 dark:border-amber-700/60 px-3.5 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer"

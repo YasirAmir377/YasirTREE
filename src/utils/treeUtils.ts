@@ -35,22 +35,11 @@ export function buildFamilyTree(entries: RelationEntry[]): {
   rootsCount: number;
 } {
   const allPersonsSet = new Set<string>();
-  const childrenMap = new Map<string, Set<string>>(); // parent -> set of sons
   const parentMap = new Map<string, Set<string>>(); // son -> set of parents
 
-  function addRelation(parent: string, son: string) {
-    const p = cleanName(parent);
-    const s = cleanName(son);
-    if (!p || !s || p === s) return;
-
-    allPersonsSet.add(p);
-    allPersonsSet.add(s);
-
-    if (!childrenMap.has(p)) childrenMap.set(p, new Set());
-    childrenMap.get(p)!.add(s);
-
-    if (!parentMap.has(s)) parentMap.set(s, new Set());
-    parentMap.get(s)!.add(p);
+  function addPerson(p: string) {
+    const clean = cleanName(p);
+    if (clean) allPersonsSet.add(clean);
   }
 
   entries.forEach(e => {
@@ -59,14 +48,22 @@ export function buildFamilyTree(entries: RelationEntry[]): {
     const grandfather = cleanName(e.grandfatherName || '');
     const greatGrandfather = cleanName(e.greatGrandfatherName || '');
 
+    if (greatGrandfather) addPerson(greatGrandfather);
+    if (grandfather) addPerson(grandfather);
+    if (father) addPerson(father);
+    if (son) addPerson(son);
+
     if (greatGrandfather && grandfather) {
-      addRelation(greatGrandfather, grandfather);
+      if (!parentMap.has(grandfather)) parentMap.set(grandfather, new Set());
+      parentMap.get(grandfather)!.add(greatGrandfather);
     }
     if (grandfather && father) {
-      addRelation(grandfather, father);
+      if (!parentMap.has(father)) parentMap.set(father, new Set());
+      parentMap.get(father)!.add(grandfather);
     }
     if (father && son) {
-      addRelation(father, son);
+      if (!parentMap.has(son)) parentMap.set(son, new Set());
+      parentMap.get(son)!.add(father);
     }
   });
 
@@ -86,21 +83,56 @@ export function buildFamilyTree(entries: RelationEntry[]): {
     roots.push(allPersons[0]);
   }
 
+  // Get children strictly by lineage path to prevent mixing duplicate names
+  function getChildrenForNode(ancestorChain: string[]): string[] {
+    const childSet = new Set<string>();
+    const len = ancestorChain.length;
+    const currentName = ancestorChain[len - 1];
+
+    entries.forEach(e => {
+      const s = cleanName(e.sonName);
+      const f = cleanName(e.fatherName);
+      const g = cleanName(e.grandfatherName || '');
+      const gg = cleanName(e.greatGrandfatherName || '');
+
+      if (!s || !f) return;
+
+      if (len === 1) {
+        if (f === currentName && (!g || g === '')) {
+          childSet.add(s);
+        }
+      } else if (len === 2) {
+        const grandfather = ancestorChain[0];
+        if (g === grandfather && f === currentName) {
+          childSet.add(s);
+        }
+      } else if (len >= 3) {
+        const greatGrandfather = ancestorChain[len - 3];
+        const grandfather = ancestorChain[len - 2];
+        if (gg === greatGrandfather && g === grandfather && f === currentName) {
+          childSet.add(s);
+        }
+      }
+    });
+
+    return Array.from(childSet);
+  }
+
   // Build recursive tree allowing same names across different branches with dynamic leaf count calculation
   function buildNode(name: string, currentGen: number, ancestorChain: string[]): FamilyMember {
     const newAncestorChain = [...ancestorChain, name];
 
-    const sonNames = childrenMap.get(name) || new Set<string>();
+    const sonNames = getChildrenForNode(newAncestorChain);
     const children: FamilyMember[] = [];
 
     sonNames.forEach(sonName => {
-      // Prevent infinite loops only if this exact person is an ancestor in the direct line
+      // Prevent infinite loops only if this exact lineage context repeats
       if (!ancestorChain.includes(sonName)) {
         children.push(buildNode(sonName, currentGen + 1, newAncestorChain));
       }
     });
 
-    const uniqueId = `${name}-${ancestorChain.join('-')}-${currentGen}-${Math.random().toString(36).substring(2, 6)}`;
+    const uniqueId = `${name}-${newAncestorChain.join('-')}-${currentGen}-${Math.random().toString(36).substring(2, 6)}`;
 
     return {
       uniqueId,

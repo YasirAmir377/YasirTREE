@@ -30,9 +30,12 @@ export interface TreeSettings {
   themeColor: 'amber' | 'emerald' | 'gold' | 'royal';
   fontFamily: string;
   nameFontSizeScale?: number;
-  branchStyle?: 'curved' | 'straight' | 'geometric';
+  branchStyle?: 'curved' | 'straight' | 'geometric' | 'waved';
   generationOrder?: 'ascending' | 'descending';
   verticalSpacingMode?: 'normal' | 'extended' | 'super_extended';
+  horizontalSpacing?: 'normal' | 'wide' | 'ultra_wide';
   branchColoring?: 'default' | 'branch_groups' | 'custom';
   branchCustomColors?: Record<string, string>; // branch root name -> hex color
+  branchColor?: string;
+  nodeColoringMode?: 'generation' | 'tags' | 'branch' | 'default';
 }
