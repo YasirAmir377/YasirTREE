@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FamilyMember, TreeSettings, RelationEntry } from '../types';
 import { cleanName } from '../utils/treeUtils';
 import { 
@@ -166,6 +166,36 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
   const [nodeDragStart, setNodeDragStart] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
 
+  const [branchOffsets, setBranchOffsets] = useState<Record<string, { x: number; y: number }>>({});
+  const [draggingBranchKey, setDraggingBranchKey] = useState<string | null>(null);
+  const branchDragStartRef = useRef<{ clientX: number, clientY: number, startX: number, startY: number }>({ clientX: 0, clientY: 0, startX: 0, startY: 0 });
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const touchMovedRef = useRef<boolean>(false);
+
+  const handleBranchMouseDown = (e: React.MouseEvent, branchKey: string) => {
+    e.stopPropagation();
+    setDraggingBranchKey(branchKey);
+    const current = branchOffsets[branchKey] || { x: 0, y: 0 };
+    branchDragStartRef.current = { clientX: e.clientX, clientY: e.clientY, startX: current.x, startY: current.y };
+  };
+
+  const handleBranchMouseMove = (e: React.MouseEvent) => {
+    if (!draggingBranchKey) return;
+    const dx = (e.clientX - branchDragStartRef.current.clientX) / zoom;
+    const dy = (e.clientY - branchDragStartRef.current.clientY) / zoom;
+    setBranchOffsets(prev => ({
+      ...prev,
+      [draggingBranchKey]: {
+        x: branchDragStartRef.current.startX + dx,
+        y: branchDragStartRef.current.startY + dy
+      }
+    }));
+  };
+
+  const handleBranchMouseUp = () => {
+    setDraggingBranchKey(null);
+  };
+
   const handleNodeMouseDown = (e: React.MouseEvent, uniqueId: string) => {
     e.stopPropagation();
     setDraggingNodeId(uniqueId);
@@ -214,11 +244,21 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     setDraggingNodeId(null);
   };
 
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const handleAutoLayout = () => {
     setNodeOffsets({});
+    setBranchOffsets({});
     setZoom(1.0);
+    if (containerRef.current) {
+      containerRef.current.scrollTo({
+        left: (containerRef.current.scrollWidth - containerRef.current.clientWidth) / 2,
+        top: 0,
+        behavior: 'smooth'
+      });
+    }
   };
-  const [zoom, setZoom] = useState<number>(1.0); // Standard starting at 100%
+  const [zoom, setZoom] = useState<number>(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0)); // Standard starting at 100% (or 45% on mobile)
   const [pan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [initialPinchDist, setInitialPinchDist] = useState<number | null>(null);
   const [initialZoomOnPinch, setInitialZoomOnPinch] = useState<number>(1.0);
@@ -266,8 +306,16 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     setZoom(1.0); // Reset to standard 100%
   };
   const handleCenterView = () => {
-    setZoom(1.0);
+    setZoom(typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0);
     setNodeOffsets({});
+    setBranchOffsets({});
+    if (containerRef.current) {
+      containerRef.current.scrollTo({
+        left: (containerRef.current.scrollWidth - containerRef.current.clientWidth) / 2,
+        top: 0,
+        behavior: 'smooth'
+      });
+    }
   };
 
   const handleExportSVG = () => {
@@ -417,6 +465,22 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       const midY = (actualY + actualChildY) / 2;
       return `M ${actualX} ${actualY + startYOffset} Q ${midX} ${midY} ${actualChildX} ${actualChildY + endYOffset}`;
     }
+    if (branchStyle === 'twisted') {
+      const midX = (actualX + actualChildX) / 2;
+      const midY = (actualY + actualChildY) / 2;
+      const q1X = actualX + (midX - actualX) * 0.5 + (spreadFactor * 70);
+      const q1Y = actualY + (midY - actualY) * 0.5 - 35;
+      const q2X = midX + (actualChildX - midX) * 0.5 - (spreadFactor * 70);
+      const q2Y = midY + (actualChildY - midY) * 0.5 + 35;
+      return `M ${actualX} ${actualY + startYOffset} Q ${q1X} ${q1Y} ${midX} ${midY} Q ${q2X} ${q2Y} ${actualChildX} ${actualChildY + endYOffset}`;
+    }
+    if (branchStyle === 'draggable') {
+      const branchKey = `${parentId}-${childId}`;
+      const offset = branchOffsets[branchKey] || { x: 0, y: 0 };
+      const midX = (actualX + actualChildX) / 2 + (spreadFactor * 30) + offset.x;
+      const midY = (actualY + actualChildY) / 2 + offset.y;
+      return `M ${actualX} ${actualY + startYOffset} Q ${midX} ${midY} ${actualChildX} ${actualChildY + endYOffset}`;
+    }
     // Default curved
     const ctrlOffset = generationOrder === 'ascending' ? 45 : -45;
     return `M ${actualX} ${actualY + startYOffset} C ${actualX + spreadFactor * 35} ${actualY + ctrlOffset}, ${actualChildX} ${actualChildY - ctrlOffset}, ${actualChildX} ${actualChildY + endYOffset}`;
@@ -512,6 +576,31 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 opacity="0.92"
                 className="transition-all duration-500 ease-in-out"
               />
+              {branchStyle === 'draggable' && (() => {
+                const branchKey = `${member.uniqueId}-${child.uniqueId}`;
+                const parentOffset = nodeOffsets[member.uniqueId] || { x: 0, y: 0 };
+                const childOffset = nodeOffsets[child.uniqueId] || { x: 0, y: 0 };
+                const actualX = x + parentOffset.x;
+                const actualY = y + parentOffset.y;
+                const actualChildX = childX + childOffset.x;
+                const actualChildY = childY + childOffset.y;
+                const offset = branchOffsets[branchKey] || { x: 0, y: 0 };
+                const midX = (actualX + actualChildX) / 2 + (spreadFactor * 30) + offset.x;
+                const midY = (actualY + actualChildY) / 2 + offset.y;
+                return (
+                  <circle
+                    cx={midX}
+                    cy={midY}
+                    r="8"
+                    fill="#d4af37"
+                    stroke="#ffffff"
+                    strokeWidth="2"
+                    className="cursor-grab hover:scale-125 transition-transform shadow-lg"
+                    onMouseDown={(e) => handleBranchMouseDown(e, branchKey)}
+                    title="اسحب هذا المقبض لتمطيط وتحريك الغصن بحرية"
+                  />
+                );
+              })()}
               {renderSubTreeSVG(child, childX, childY, childSpread, level + 1)}
             </g>
           );
@@ -553,7 +642,38 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             setSelectedPerson(member.uniqueId);
           }}
           onMouseDown={(e) => handleNodeMouseDown(e, member.uniqueId)}
-          onTouchStart={(e) => handleNodeTouchStart(e, member.uniqueId)}
+          onTouchStart={(e) => {
+            handleNodeTouchStart(e, member.uniqueId);
+            touchMovedRef.current = false;
+            const touch = e.touches[0];
+            if (touch) {
+              longPressTimerRef.current = setTimeout(() => {
+                if (!touchMovedRef.current) {
+                  setContextMenu({
+                    visible: true,
+                    x: touch.clientX,
+                    y: touch.clientY,
+                    member: member
+                  });
+                }
+              }, 650);
+            }
+          }}
+          onTouchMove={(e) => {
+            handleNodeTouchMove(e);
+            touchMovedRef.current = true;
+            if (longPressTimerRef.current) {
+              clearTimeout(longPressTimerRef.current);
+              longPressTimerRef.current = null;
+            }
+          }}
+          onTouchEnd={() => {
+            handleNodeTouchEnd();
+            if (longPressTimerRef.current) {
+              clearTimeout(longPressTimerRef.current);
+              longPressTimerRef.current = null;
+            }
+          }}
           style={{ cursor: 'grab', transition: draggingNodeId === member.uniqueId ? 'none' : 'transform 0.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
           title="اسحب هذه العقدة وأفلتها فوق أي شخص آخر لتغيير الأب وإعادة ربط الغصن تلقائياً"
         >
@@ -792,10 +912,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">أنماط وتوجيه خطوط الربط</label>
             <select
               value={branchStyle}
-              onChange={e => setSettings(prev => ({ ...prev, branchStyle: e.target.value as 'curved' | 'straight' | 'geometric' | 'waved' }))}
+              onChange={e => setSettings(prev => ({ ...prev, branchStyle: e.target.value as 'curved' | 'straight' | 'geometric' | 'waved' | 'twisted' | 'draggable' }))}
               className="w-full px-3 py-1.5 bg-white dark:bg-[#15110e] border border-stone-300 dark:border-stone-700 rounded-lg text-xs font-medium"
             >
               <option value="curved">خطوط منحنية طبيعية (Curved)</option>
+              <option value="twisted">أغصان ملتوية وعضوية (Twisted)</option>
+              <option value="draggable">أغصان متحركة (قابل للتحريك والتمطيط)</option>
               <option value="waved">خطوط متعرجة / شلالية (Waved)</option>
               <option value="straight">خطوط مستقيمة (Straight)</option>
               <option value="geometric">خطوط هندسية (Geometric)</option>
@@ -854,32 +976,32 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       )}
 
       {/* Canvas Controls Bar */}
-      <div className="bg-white dark:bg-[#1e1915] border border-[#e5dac6] dark:border-[#3d3328] rounded-xl px-4 py-2.5 shadow-sm flex flex-wrap items-center justify-between gap-3 no-print">
-        <div className="flex items-center gap-3">
-          <div className="relative">
+      <div className="bg-white dark:bg-[#1e1915] border border-[#e5dac6] dark:border-[#3d3328] rounded-xl px-4 py-2.5 shadow-sm flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 no-print">
+        <div className="flex items-center gap-3 w-full lg:w-auto justify-between lg:justify-start">
+          <div className="relative w-full lg:w-auto">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               placeholder="البحث عن اسم..."
-              className="pl-3 pr-9 py-1.5 bg-[#fcf8f2] dark:bg-[#28221b] border border-[#d8ccb5] dark:border-[#42372c] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-amber-600 text-stone-800 dark:text-stone-100"
+              className="w-full lg:w-auto pl-3 pr-9 py-1.5 bg-[#fcf8f2] dark:bg-[#28221b] border border-[#d8ccb5] dark:border-[#42372c] rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-amber-600 text-stone-800 dark:text-stone-100"
             />
           </div>
           {searchQuery && (
-            <button onClick={() => setSearchQuery('')} className="text-xs text-stone-500 hover:text-stone-800 underline">
+            <button onClick={() => setSearchQuery('')} className="text-xs text-stone-500 hover:text-stone-800 underline whitespace-nowrap">
               مسح البحث
             </button>
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-start lg:justify-end overflow-x-auto pb-1 lg:pb-0">
           {/* Name Font Size Scale Controls (A- / A+) */}
-          <div className="flex items-center gap-1.5 bg-[#fcf8f2] dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] px-2.5 py-1">
-            <span className="text-xs font-bold text-stone-600 dark:text-stone-300">حجم الأسماء:</span>
+          <div className="flex items-center gap-1 bg-[#fcf8f2] dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] px-2 py-1 shrink-0">
+            <span className="text-[11px] font-bold text-stone-600 dark:text-stone-300">حجم الأسماء:</span>
             <button
               onClick={() => setSettings(prev => ({ ...prev, nameFontSizeScale: Math.max(0.5, Number(((prev.nameFontSizeScale || 1.0) - 0.2).toFixed(1))) }))}
-              className="px-2 py-0.5 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-bold cursor-pointer hover:bg-amber-100"
+              className="px-1.5 py-0.5 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-bold cursor-pointer hover:bg-amber-100"
               title="تصغير الأسماء"
             >
               A-
@@ -887,7 +1009,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <select
               value={Math.round(nameScale * 100)}
               onChange={e => setSettings(prev => ({ ...prev, nameFontSizeScale: Number(e.target.value) / 100 }))}
-              className="px-2 py-1 bg-white dark:bg-stone-800 text-amber-900 dark:text-amber-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-mono font-bold cursor-pointer"
+              className="px-1.5 py-0.5 bg-white dark:bg-stone-800 text-amber-900 dark:text-amber-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-mono font-bold cursor-pointer"
             >
               <option value="50">50%</option>
               <option value="100">100%</option>
@@ -902,41 +1024,41 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             </select>
             <button
               onClick={() => setSettings(prev => ({ ...prev, nameFontSizeScale: Math.min(3.0, Number(((prev.nameFontSizeScale || 1.0) + 0.2).toFixed(1))) }))}
-              className="px-2 py-0.5 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-bold cursor-pointer hover:bg-amber-100"
+              className="px-1.5 py-0.5 bg-white dark:bg-stone-800 text-stone-800 dark:text-stone-200 rounded border border-stone-300 dark:border-stone-700 text-xs font-bold cursor-pointer hover:bg-amber-100"
               title="تكبير الأسماء"
             >
               A+
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-mono text-stone-500 bg-stone-100 dark:bg-stone-800 px-2.5 py-1 rounded-md">
+          <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
+            <span className="text-xs font-mono text-stone-500 bg-stone-100 dark:bg-stone-800 px-2 py-1 rounded-md">
               {Math.round(zoom * 100)}%
             </span>
-            <button onClick={handleZoomOut} className="p-2 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="تصغير الشجرة">
+            <button onClick={handleZoomOut} className="p-1.5 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="تصغير الشجرة">
               <ZoomOut className="w-4 h-4" />
             </button>
-            <button onClick={handleZoomIn} className="p-2 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="تكبير الشجرة">
+            <button onClick={handleZoomIn} className="p-1.5 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="تكبير الشجرة">
               <ZoomIn className="w-4 h-4" />
             </button>
-            <button onClick={handleResetZoom} className="p-2 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="إعادة التعيين لـ 100%">
+            <button onClick={handleResetZoom} className="p-1.5 bg-stone-100 dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] cursor-pointer" title="إعادة التعيين لـ 100%">
               <RotateCcw className="w-4 h-4" />
             </button>
             <button
               onClick={handleCenterView}
-              className="flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-amber-100 px-3 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer border border-amber-600"
+              className="flex items-center gap-1 bg-amber-800 hover:bg-amber-900 text-amber-100 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer border border-amber-600 whitespace-nowrap"
               title="توسيط الشجرة بالمنتصف وإعادة التعيين"
             >
-              <RotateCcw className="w-4 h-4 text-amber-300" />
+              <RotateCcw className="w-3.5 h-3.5 text-amber-300" />
               <span>توسيط الشجرة بالمنتصف</span>
             </button>
-            <button onClick={handleAutoLayout} className="flex items-center gap-1.5 bg-[#5c3a21] hover:bg-[#4a2e1a] text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer" title="إعادة ترتيب الشجرة تلقائياً ومنع التداخل">
-              <LayoutGrid className="w-4 h-4" />
+            <button onClick={handleAutoLayout} className="flex items-center gap-1 bg-[#5c3a21] hover:bg-[#4a2e1a] text-white px-2.5 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer whitespace-nowrap" title="إعادة ترتيب الشجرة تلقائياً ومنع التداخل">
+              <LayoutGrid className="w-3.5 h-3.5" />
               <span>إعادة ترتيب تلقائي</span>
             </button>
-            <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-800 text-white px-4 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer">
-              <Download className="w-4 h-4" />
-              <span>تصدير أعلى دقة / PDF</span>
+            <button onClick={() => setShowExportModal(true)} className="flex items-center gap-1 bg-amber-700 hover:bg-amber-800 text-white px-3 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer whitespace-nowrap">
+              <Download className="w-3.5 h-3.5" />
+              <span>تصدير HD / PDF</span>
             </button>
           </div>
         </div>
@@ -944,11 +1066,21 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
       {/* Main Heritage Family Tree SVG Canvas Container (3000 x 2200) */}
       <div 
-        className="relative bg-[#f7f1e3] dark:bg-[#181410] border-4 border-[#d4af37]/40 rounded-2xl shadow-2xl overflow-hidden select-none"
+        ref={containerRef}
+        className="relative bg-[#f7f1e3] dark:bg-[#181410] border-4 border-[#d4af37]/40 rounded-2xl shadow-2xl overflow-auto select-none"
         style={{ minHeight: '750px', height: '84vh' }}
-        onMouseMove={handleNodeMouseMove}
-        onMouseUp={handleNodeMouseUp}
-        onMouseLeave={handleNodeMouseUp}
+        onMouseMove={(e) => {
+          handleNodeMouseMove(e);
+          handleBranchMouseMove(e);
+        }}
+        onMouseUp={() => {
+          handleNodeMouseUp();
+          handleBranchMouseUp();
+        }}
+        onMouseLeave={() => {
+          handleNodeMouseUp();
+          handleBranchMouseUp();
+        }}
         onTouchStart={handleTouchStart}
         onTouchMove={(e) => {
           handleTouchMove(e);
