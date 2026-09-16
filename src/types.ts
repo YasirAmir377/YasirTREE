@@ -38,4 +38,5 @@ export interface TreeSettings {
   branchCustomColors?: Record<string, string>; // branch root name -> hex color
   branchColor?: string;
   nodeColoringMode?: 'generation' | 'tags' | 'branch' | 'default';
+  hideRootNode?: boolean;
 }

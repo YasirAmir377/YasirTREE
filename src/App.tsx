@@ -27,10 +27,13 @@ export default function App() {
     return INITIAL_ENTRIES;
   });
 
+  const [syncStatus, setSyncStatus] = useState<'saved' | 'syncing' | 'offline'>('saved');
+
   // Sync with Firestore on Auth state change
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
+        setSyncStatus('syncing');
         try {
           const colRef = collection(db, `users/${user.uid}/familyEntries`);
           const snapshot = await getDocs(colRef);
@@ -49,9 +52,13 @@ export default function App() {
               });
             }
           }
+          setSyncStatus('saved');
         } catch (e) {
           console.error("Error fetching from Firestore", e);
+          setSyncStatus('offline');
         }
+      } else {
+        setSyncStatus('saved');
       }
     });
     return () => unsubscribe();
@@ -59,13 +66,7 @@ export default function App() {
 
   // Tree customization settings
   const [settings, setSettings] = useState<TreeSettings>(() => {
-    try {
-      const saved = localStorage.getItem('heritage_family_tree_settings');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
-    }
-    return {
+    const defaults: TreeSettings = {
       title: 'شجرة عائلة النجم',
       subtitle: 'سلسلة الآباء والأبناء التراثية',
       showAyah: true,
@@ -78,8 +79,44 @@ export default function App() {
       fontFamily: 'Amiri',
       nameFontSizeScale: 1.0,
       branchStyle: 'curved',
-      generationOrder: 'descending'
+      generationOrder: 'descending',
+      verticalSpacingMode: 'normal',
+      horizontalSpacing: 'normal',
+      branchColoring: 'default',
+      nodeColoringMode: 'generation',
+      hideRootNode: false
     };
+    try {
+      const saved = localStorage.getItem('heritage_family_tree_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...defaults,
+          ...parsed,
+          title: parsed.title ?? defaults.title,
+          subtitle: parsed.subtitle ?? defaults.subtitle,
+          showAyah: parsed.showAyah ?? defaults.showAyah,
+          showOrnaments: parsed.showOrnaments ?? defaults.showOrnaments,
+          showLeaves: parsed.showLeaves ?? defaults.showLeaves,
+          lineThickness: parsed.lineThickness ?? defaults.lineThickness,
+          layoutStyle: parsed.layoutStyle ?? defaults.layoutStyle,
+          ornamentStyle: parsed.ornamentStyle ?? defaults.ornamentStyle,
+          themeColor: parsed.themeColor ?? defaults.themeColor,
+          fontFamily: parsed.fontFamily ?? defaults.fontFamily,
+          nameFontSizeScale: parsed.nameFontSizeScale ?? defaults.nameFontSizeScale,
+          branchStyle: parsed.branchStyle ?? defaults.branchStyle,
+          generationOrder: parsed.generationOrder ?? defaults.generationOrder,
+          verticalSpacingMode: parsed.verticalSpacingMode ?? defaults.verticalSpacingMode,
+          horizontalSpacing: parsed.horizontalSpacing ?? defaults.horizontalSpacing,
+          branchColoring: parsed.branchColoring ?? defaults.branchColoring,
+          nodeColoringMode: parsed.nodeColoringMode ?? defaults.nodeColoringMode,
+          hideRootNode: parsed.hideRootNode ?? defaults.hideRootNode,
+        };
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return defaults;
   });
 
   // Auto-save to localStorage & Firestore if logged in
@@ -87,15 +124,19 @@ export default function App() {
     try {
       localStorage.setItem('heritage_family_tree_entries', JSON.stringify(entries));
       if (auth.currentUser) {
-        entries.forEach(async (entry) => {
-          try {
-            await setDoc(doc(db, `users/${auth.currentUser!.uid}/familyEntries`, entry.id), {
+        setSyncStatus('syncing');
+        Promise.all(
+          entries.map(entry =>
+            setDoc(doc(db, `users/${auth.currentUser!.uid}/familyEntries`, entry.id), {
               ...entry,
               userId: auth.currentUser!.uid
-            });
-          } catch (e) {
-            console.error("Firestore sync error", e);
-          }
+            })
+          )
+        ).then(() => {
+          setSyncStatus('saved');
+        }).catch(e => {
+          console.error("Firestore sync error", e);
+          setSyncStatus('offline');
         });
       }
     } catch (e) {
@@ -212,6 +253,7 @@ export default function App() {
         onImportJson={handleJsonImportFile}
         totalPersons={treeData.allPersons.length}
         totalRelations={treeData.totalRelations}
+        syncStatus={syncStatus}
       />
 
       {/* Main Content Container */}

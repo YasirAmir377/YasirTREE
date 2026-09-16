@@ -10,6 +10,7 @@ interface NavbarProps {
   onImportJson: (e: React.ChangeEvent<HTMLInputElement>) => void;
   totalPersons: number;
   totalRelations: number;
+  syncStatus?: 'saved' | 'syncing' | 'offline';
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,7 +20,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onResetData,
   onImportJson,
   totalPersons,
-  totalRelations
+  totalRelations,
+  syncStatus = 'saved'
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -43,7 +45,26 @@ export const Navbar: React.FC<NavbarProps> = ({
               <h1 className="text-xl font-bold font-amiri tracking-wide text-amber-100">شجرة العائلة التراثية</h1>
               <span className="text-xs bg-amber-900/80 text-amber-200 border border-amber-600/50 px-2 py-0.5 rounded-full font-medium">سلسلة الآباء والأبناء</span>
             </div>
-            <p className="text-xs text-stone-400">إدارة الأنساب والعلاقات التراثية بدقة</p>
+            <div className="flex items-center gap-2 mt-0.5">
+              <p className="text-xs text-stone-400">إدارة الأنساب والعلاقات التراثية بدقة</p>
+              {/* Firestore Sync Status Indicator */}
+              {syncStatus === 'syncing' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] bg-amber-900/60 text-amber-200 border border-amber-600/40 px-2 py-0.5 rounded-full animate-pulse">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                  جاري المزامنة...
+                </span>
+              ) : syncStatus === 'offline' ? (
+                <span className="inline-flex items-center gap-1 text-[10px] bg-stone-800 text-stone-300 border border-stone-600 px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 rounded-full bg-stone-400"></span>
+                  محلي
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-950/80 text-emerald-200 border border-emerald-600/50 px-2 py-0.5 rounded-full shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  تم الحفظ في Firestore
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
