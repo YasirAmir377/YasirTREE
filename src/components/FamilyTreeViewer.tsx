@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { FamilyMember, TreeSettings, RelationEntry } from '../types';
 import { cleanName } from '../utils/treeUtils';
+import { computeStrictTreeLayout } from '../utils/strictTreeLayout';
 import { 
   ZoomIn, ZoomOut, RotateCcw, Download, 
   Search, Sliders, Sparkles, ChevronDown, ChevronUp, FileText, Printer, ArrowUpDown, LayoutGrid 
@@ -42,29 +43,32 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
   const handleReparentNode = (sonName: string, newFatherName: string) => {
     if (!setEntries) return;
-    if (sonName === newFatherName) return;
+    if (cleanName(sonName) === cleanName(newFatherName)) return;
 
     // Check circularity: newFatherName cannot be a descendant of sonName
     const descendants = new Set<string>();
-    const queue = [sonName];
+    const queue = [cleanName(sonName)];
     while (queue.length > 0) {
       const curr = queue.shift()!;
       descendants.add(curr);
       entries.forEach(e => {
-        if (e.fatherName === curr && e.sonName) {
-          descendants.add(e.sonName);
-          queue.push(e.sonName);
+        if (cleanName(e.fatherName) === curr && e.sonName) {
+          const cleanSon = cleanName(e.sonName);
+          if (!descendants.has(cleanSon)) {
+            descendants.add(cleanSon);
+            queue.push(cleanSon);
+          }
         }
       });
     }
 
-    if (descendants.has(newFatherName)) {
+    if (descendants.has(cleanName(newFatherName))) {
       alert(`عذراً، لا يمكن ربط (${sonName}) بأحد أبنائه أو أحفاده (${newFatherName}) لتجنب التداخل الدائري.`);
       return;
     }
 
     setEntries(prev => {
-      const existingIndex = prev.findIndex(e => e.sonName === sonName);
+      const existingIndex = prev.findIndex(e => cleanName(e.sonName) === cleanName(sonName));
       if (existingIndex >= 0) {
         const updated = [...prev];
         updated[existingIndex] = {
@@ -84,7 +88,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       }
     });
 
-    alert(`تم بنجاح سحب وإفلات (${sonName}) ليصبح ابناً لـ (${newFatherName}) وتحديث الغصن والرابط فورياً.`);
+    setNodeOffsets({});
+    setBranchOffsets({});
+    setSelectedBranch(null);
   };
   const [showAddChildModal, setShowAddChildModal] = useState<boolean>(false);
   const [showAddParentModal, setShowAddParentModal] = useState<boolean>(false);
@@ -249,6 +255,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const handleAutoLayout = () => {
     setNodeOffsets({});
     setBranchOffsets({});
+    setPan({ x: 0, y: 0 });
     setZoom(1.0);
     if (containerRef.current) {
       containerRef.current.scrollTo({
@@ -259,31 +266,44 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     }
   };
   const [zoom, setZoom] = useState<number>(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0)); // Standard starting at 100% (or 45% on mobile)
-  const [pan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [initialPinchDist, setInitialPinchDist] = useState<number | null>(null);
   const [initialZoomOnPinch, setInitialZoomOnPinch] = useState<number>(1.0);
   const [isPanning, setIsPanning] = useState<boolean>(false);
-  const [panStart, setPanStart] = useState<{ x: number; y: number; scrollLeft: number; scrollTop: number }>({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+  const [panStart, setPanStart] = useState<{ clientX: number; clientY: number; startPanX: number; startPanY: number }>({
+    clientX: 0,
+    clientY: 0,
+    startPanX: 0,
+    startPanY: 0
+  });
 
   const handleContainerMouseDown = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.tagName === 'svg' || target.tagName === 'rect' || target === containerRef.current) {
+    // Don't initiate background pan if clicking on an interactive node, branch button, or modal
+    if (target.tagName === 'svg' || target.tagName === 'rect' || target === containerRef.current || target.classList?.contains('canvas-bg')) {
       setIsPanning(true);
       setPanStart({
-        x: e.clientX,
-        y: e.clientY,
-        scrollLeft: containerRef.current?.scrollLeft || 0,
-        scrollTop: containerRef.current?.scrollTop || 0
+        clientX: e.clientX,
+        clientY: e.clientY,
+        startPanX: pan.x,
+        startPanY: pan.y
       });
     }
   };
 
   const handleContainerMouseMove = (e: React.MouseEvent) => {
-    if (!isPanning || !containerRef.current) return;
-    const dx = e.clientX - panStart.x;
-    const dy = e.clientY - panStart.y;
-    containerRef.current.scrollLeft = panStart.scrollLeft - dx;
-    containerRef.current.scrollTop = panStart.scrollTop - dy;
+    if (!isPanning) return;
+    const svgElement = document.getElementById('heritage-tree-svg');
+    const svgRect = svgElement ? svgElement.getBoundingClientRect() : null;
+    const svgScale = svgRect && svgRect.width > 0 ? (3000 / svgRect.width) : 1;
+    const dx = (e.clientX - panStart.clientX) * svgScale;
+    const dy = (e.clientY - panStart.clientY) * svgScale;
+    const maxPanX = 2500 * Math.max(1, zoom);
+    const maxPanY = 1800 * Math.max(1, zoom);
+    setPan({
+      x: Math.max(-maxPanX, Math.min(maxPanX, panStart.startPanX + dx)),
+      y: Math.max(-maxPanY, Math.min(maxPanY, panStart.startPanY + dy))
+    });
   };
 
   const handleContainerMouseUp = () => {
@@ -298,6 +318,17 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       );
       setInitialPinchDist(dist);
       setInitialZoomOnPinch(zoom);
+    } else if (e.touches.length === 1) {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'svg' || target.tagName === 'rect' || target === containerRef.current) {
+        setIsPanning(true);
+        setPanStart({
+          clientX: e.touches[0].clientX,
+          clientY: e.touches[0].clientY,
+          startPanX: pan.x,
+          startPanY: pan.y
+        });
+      }
     } else {
       setInitialPinchDist(null);
     }
@@ -312,12 +343,27 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       const scaleFactor = dist / initialPinchDist;
       const newZoom = Math.min(Math.max(initialZoomOnPinch * scaleFactor, 0.3), 3.5);
       setZoom(newZoom);
+    } else if (e.touches.length === 1 && isPanning) {
+      const svgElement = document.getElementById('heritage-tree-svg');
+      const svgRect = svgElement ? svgElement.getBoundingClientRect() : null;
+      const svgScale = svgRect && svgRect.width > 0 ? (3000 / svgRect.width) : 1;
+      const dx = (e.touches[0].clientX - panStart.clientX) * svgScale;
+      const dy = (e.touches[0].clientY - panStart.clientY) * svgScale;
+      const maxPanX = 2500 * Math.max(1, zoom);
+      const maxPanY = 1800 * Math.max(1, zoom);
+      setPan({
+        x: Math.max(-maxPanX, Math.min(maxPanX, panStart.startPanX + dx)),
+        y: Math.max(-maxPanY, Math.min(maxPanY, panStart.startPanY + dy))
+      });
     }
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
     if (e.touches.length < 2) {
       setInitialPinchDist(null);
+    }
+    if (e.touches.length === 0) {
+      setIsPanning(false);
     }
   };
 
@@ -358,9 +404,11 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.15, 0.3));
   const handleResetZoom = () => {
     setZoom(1.0); // Reset to standard 100%
+    setPan({ x: 0, y: 0 });
   };
   const handleCenterView = () => {
     setZoom(typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0);
+    setPan({ x: 0, y: 0 });
     setNodeOffsets({});
     setBranchOffsets({});
     if (containerRef.current) {
@@ -446,6 +494,11 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const branchStyle = settings.branchStyle || 'curved';
   const generationOrder = settings.generationOrder || 'descending';
 
+  // Compute mathematically guaranteed non-crossing, non-overlapping tree layout
+  const strictLayout = useMemo(() => {
+    return computeStrictTreeLayout(treeData.roots, settings, generationOrder);
+  }, [treeData.roots, settings, generationOrder]);
+
   // Helper functions for member tags checking
   const getMemberTags = (name: string): string[] => {
     const entry = entries.find(e => 
@@ -495,17 +548,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     return '#ffffff';
   };
 
-  const getBranchPath = (parentId: string, childId: string, x: number, y: number, childX: number, childY: number, spreadFactor: number) => {
-    const parentOffset = nodeOffsets[parentId] || { x: 0, y: 0 };
-    const childOffset = nodeOffsets[childId] || { x: 0, y: 0 };
-
-    const actualX = x + parentOffset.x;
-    const actualY = y + parentOffset.y;
-    const actualChildX = childX + childOffset.x;
-    const actualChildY = childY + childOffset.y;
-
-    const startYOffset = generationOrder === 'ascending' ? 15 : -15;
-    const endYOffset = generationOrder === 'ascending' ? -15 : 15;
+  const getBranchPath = (parentId: string, childId: string, actualX: number, actualY: number, actualChildX: number, actualChildY: number) => {
+    const startYOffset = generationOrder === 'ascending' ? 22 : -22;
+    const endYOffset = generationOrder === 'ascending' ? -22 : 22;
 
     if (branchStyle === 'straight') {
       return `M ${actualX} ${actualY + startYOffset} L ${actualChildX} ${actualChildY + endYOffset}`;
@@ -515,29 +560,20 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       return `M ${actualX} ${actualY + startYOffset} L ${actualX} ${midY} L ${actualChildX} ${midY} L ${actualChildX} ${actualChildY + endYOffset}`;
     }
     if (branchStyle === 'waved') {
-      const midX = (actualX + actualChildX) / 2 + (spreadFactor * 40);
-      const midY = (actualY + actualChildY) / 2;
-      return `M ${actualX} ${actualY + startYOffset} Q ${midX} ${midY} ${actualChildX} ${actualChildY + endYOffset}`;
-    }
-    if (branchStyle === 'twisted') {
       const midX = (actualX + actualChildX) / 2;
       const midY = (actualY + actualChildY) / 2;
-      const q1X = actualX + (midX - actualX) * 0.5 + (spreadFactor * 70);
-      const q1Y = actualY + (midY - actualY) * 0.5 - 35;
-      const q2X = midX + (actualChildX - midX) * 0.5 - (spreadFactor * 70);
-      const q2Y = midY + (actualChildY - midY) * 0.5 + 35;
-      return `M ${actualX} ${actualY + startYOffset} Q ${q1X} ${q1Y} ${midX} ${midY} Q ${q2X} ${q2Y} ${actualChildX} ${actualChildY + endYOffset}`;
+      return `M ${actualX} ${actualY + startYOffset} Q ${midX} ${midY} ${actualChildX} ${actualChildY + endYOffset}`;
     }
     if (branchStyle === 'draggable') {
       const branchKey = `${parentId}-${childId}`;
       const offset = branchOffsets[branchKey] || { x: 0, y: 0 };
-      const midX = (actualX + actualChildX) / 2 + (spreadFactor * 30) + offset.x;
+      const midX = (actualX + actualChildX) / 2 + offset.x;
       const midY = (actualY + actualChildY) / 2 + offset.y;
       return `M ${actualX} ${actualY + startYOffset} Q ${midX} ${midY} ${actualChildX} ${actualChildY + endYOffset}`;
     }
-    // Default curved
-    const ctrlOffset = generationOrder === 'ascending' ? 45 : -45;
-    return `M ${actualX} ${actualY + startYOffset} C ${actualX + spreadFactor * 35} ${actualY + ctrlOffset}, ${actualChildX} ${actualChildY - ctrlOffset}, ${actualChildX} ${actualChildY + endYOffset}`;
+    // Default smooth curved (strictly monotonic in Y, strictly within [min(x1, x2), max(x1, x2)] to never cross)
+    const midY = (actualY + actualChildY) / 2;
+    return `M ${actualX} ${actualY + startYOffset} C ${actualX} ${midY}, ${actualChildX} ${midY}, ${actualChildX} ${actualChildY + endYOffset}`;
   };
 
   // Organic recursive tree renderer matching the reference heritage poster design
@@ -567,7 +603,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     if (verticalMode === 'extended') spacingMultiplier = 1.4;
     if (verticalMode === 'super_extended') spacingMultiplier = 1.9;
 
-    const yOffset = (generationOrder === 'ascending' ? 140 : -140) * spacingMultiplier * Math.max(1.0, nameScale);
+    const yOffset = (generationOrder === 'ascending' ? 140 : -140) * spacingMultiplier;
 
     // Node coloring logic based on generation, tags, branch, or default
     const nodeColoringMode = settings.nodeColoringMode || 'generation';
@@ -594,95 +630,131 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       }
     }
 
-    // Dynamic auto-sizing based on name length and font scale (50% to 300%)
+    // Dynamic auto-sizing based on name length (independent of font scale)
     const nameLength = member.name.length;
-    const scaleFactor = nameScale;
-    const dynamicRx = Math.max(56, nameLength * 8.5) * scaleFactor;
-    const dynamicRy = 27 * scaleFactor;
-    const dynamicSheikhRadius = Math.max(48, nameLength * 7.5) * scaleFactor;
-    const dynamicRectWidth = Math.max(112, nameLength * 14) * scaleFactor;
-    const dynamicRectHeight = 40 * scaleFactor;
+    const dynamicRx = Math.max(56, nameLength * 8.5);
+    const dynamicRy = 27;
+    const dynamicSheikhRadius = Math.max(48, nameLength * 7.5);
+    const dynamicRectWidth = Math.max(112, nameLength * 14);
+    const dynamicRectHeight = 40;
+
+    const memberPos = strictLayout.positions.get(member.uniqueId);
+    const actualNodeX = (memberPos ? memberPos.x : x) + (nodeOffsets[member.uniqueId]?.x || 0);
+    const actualNodeY = (memberPos ? memberPos.y : y) + (nodeOffsets[member.uniqueId]?.y || 0);
+
+    const isSelectedBranchChild = selectedBranch && cleanName(selectedBranch.childName) === cleanName(member.name);
+    const isSelectedBranchParent = selectedBranch && cleanName(selectedBranch.parentName) === cleanName(member.name);
+    const isValidBranchTarget = selectedBranch && !isSelectedBranchChild && !isSelectedBranchParent;
 
     return (
       <g key={`${member.uniqueId}-${level}-${x}-${y}`}>
         {/* Organic or geometric branching */}
         {hasChildren && member.children.map((child, idx) => {
-          // Robust anti-overlap child spread scaling with child count and name widths
-          const hMode = settings.horizontalSpacing || 'normal';
-          let hMultiplier = 1.0;
-          if (hMode === 'wide') hMultiplier = 1.6;
-          if (hMode === 'ultra_wide') hMultiplier = 2.4;
+          const childPos = strictLayout.positions.get(child.uniqueId);
+          const childDefaultX = actualNodeX + (idx - (numChildren - 1) / 2) * 160;
+          const childDefaultY = actualNodeY + (generationOrder === 'ascending' ? 150 : -150);
+          const actualChildX = (childPos ? childPos.x : childDefaultX) + (nodeOffsets[child.uniqueId]?.x || 0);
+          const actualChildY = (childPos ? childPos.y : childDefaultY) + (nodeOffsets[child.uniqueId]?.y || 0);
 
-          const baseSpacing = Math.max(450 * nameScale, numChildren * 220 * nameScale) * hMultiplier;
-          const childSpread = Math.max(spread * 0.95, baseSpacing);
-          const spreadFactor = numChildren === 1 ? 0 : (idx - (numChildren - 1) / 2);
-          const childX = x + spreadFactor * childSpread;
-          const childY = y + yOffset; // Vertical distance between generations based on order
-
-          const isBranchSelected = selectedBranch && selectedBranch.parentName === member.name && selectedBranch.childName === child.name;
-          const parentOffset = nodeOffsets[member.uniqueId] || { x: 0, y: 0 };
-          const childOffset = nodeOffsets[child.uniqueId] || { x: 0, y: 0 };
-          const actualX = x + parentOffset.x;
-          const actualY = y + parentOffset.y;
-          const actualChildX = childX + childOffset.x;
-          const actualChildY = childY + childOffset.y;
-          const branchPathStr = getBranchPath(member.uniqueId, child.uniqueId, x, y, childX, childY, spreadFactor);
-          const midX = (actualX + actualChildX) / 2 + (spreadFactor * 30);
-          const midY = (actualY + actualChildY) / 2;
+          const isBranchSelected = selectedBranch && cleanName(selectedBranch.parentName) === cleanName(member.name) && cleanName(selectedBranch.childName) === cleanName(child.name);
+          const branchPathStr = getBranchPath(member.uniqueId, child.uniqueId, actualNodeX, actualNodeY, actualChildX, actualChildY);
+          const midX = (actualNodeX + actualChildX) / 2;
+          const midY = (actualNodeY + actualChildY) / 2;
 
           return (
             <g 
               key={`branch-${member.uniqueId}-${child.uniqueId}-${idx}`} 
-              className="transition-all duration-500 ease-in-out cursor-pointer"
-              draggable={true}
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', child.name);
-                setSelectedBranch({ parentName: member.name, childName: child.name });
-                e.stopPropagation();
-              }}
+              className="transition-all duration-300 ease-in-out cursor-pointer"
             >
+              {/* Wide transparent hit-area path for easy click and selection */}
               <path
                 d={branchPathStr}
                 fill="none"
-                stroke={isBranchSelected ? '#fbbf24' : (settings.branchColor || '#5c3a21')}
-                strokeWidth={isBranchSelected ? Math.max(5, (settings.lineThickness || 3) + 3) : Math.max(2, (settings.lineThickness || 3) - level * 0.3)}
-                strokeLinecap="round"
-                opacity={isBranchSelected ? "1" : "0.92"}
-                className="transition-all duration-300 ease-in-out hover:stroke-amber-400 drop-shadow-md"
+                stroke="transparent"
+                strokeWidth={26}
+                className="cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation();
                   setSelectedBranch({ parentName: member.name, childName: child.name });
                 }}
               />
+              {/* Visible Branch line */}
+              <path
+                d={branchPathStr}
+                fill="none"
+                stroke={isBranchSelected ? '#f59e0b' : (settings.branchColor || '#5c3a21')}
+                strokeWidth={isBranchSelected ? Math.max(6, (settings.lineThickness || 3) + 3) : Math.max(2, (settings.lineThickness || 3) - level * 0.2)}
+                strokeLinecap="round"
+                strokeDasharray={isBranchSelected ? '8,4' : undefined}
+                opacity={isBranchSelected ? "1" : "0.92"}
+                className={`transition-all duration-300 ease-in-out hover:stroke-amber-400 drop-shadow-md ${isBranchSelected ? 'animate-pulse' : ''}`}
+                style={{ filter: isBranchSelected ? 'drop-shadow(0 0 6px rgba(245, 158, 11, 0.9))' : undefined }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedBranch({ parentName: member.name, childName: child.name });
+                }}
+              />
+              {/* Selected Branch Action Badge with Move Handle & Delete */}
               {isBranchSelected && (
                 <g 
                   transform={`translate(${midX}, ${midY})`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRemoveBranchRelation(child.name, member.name);
-                  }}
-                  style={{ cursor: 'pointer' }}
-                  title="مسح أو حذف هذا الغصن وفصل الرابط"
+                  className="cursor-pointer"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <circle cx="0" cy="0" r="18" fill="#dc2626" stroke="#ffffff" strokeWidth="3" className="hover:scale-125 transition-transform shadow-2xl animate-pulse" />
-                  <text x="0" y="6" textAnchor="middle" fill="#ffffff" fontSize="18" fontWeight="bold">×</text>
+                  <rect
+                    x="-70"
+                    y="-20"
+                    width="140"
+                    height="40"
+                    rx="20"
+                    fill="#1e1814"
+                    stroke="#f59e0b"
+                    strokeWidth="2.5"
+                    className="shadow-2xl"
+                  />
+                  {/* Draggable re-attach handle */}
+                  <g
+                    draggable={true}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData('text/plain', child.name);
+                      setSelectedBranch({ parentName: member.name, childName: child.name });
+                      e.stopPropagation();
+                    }}
+                    title="اسحب هذا المقبض وأفلته فوق أي شخص لربط الغصن به، أو انقر على اسم الأب الجديد مباشرة"
+                    className="cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
+                    transform="translate(-32, 0)"
+                  >
+                    <circle cx="0" cy="0" r="14" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.5" />
+                    <path d="M -5 -3 L 0 -8 L 5 -3 M 0 -7 L 0 7 M -5 3 L 0 8 L 5 3" stroke="#1e1814" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                  </g>
+                  {/* Label */}
+                  <text x="5" y="4" textAnchor="middle" fill="#fef3c7" fontSize="11" fontWeight="bold" pointerEvents="none">
+                    انقل الغصن
+                  </text>
+                  {/* Delete button */}
+                  <g
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleRemoveBranchRelation(child.name, member.name);
+                    }}
+                    title="فصل هذا الغصن وتحويله إلى شجرة مستقلة"
+                    className="cursor-pointer hover:scale-110 transition-transform"
+                    transform="translate(42, 0)"
+                  >
+                    <circle cx="0" cy="0" r="13" fill="#dc2626" stroke="#ffffff" strokeWidth="1.5" />
+                    <text x="0" y="5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">×</text>
+                  </g>
                 </g>
               )}
               {branchStyle === 'draggable' && (() => {
                 const branchKey = `${member.uniqueId}-${child.uniqueId}`;
-                const parentOffset = nodeOffsets[member.uniqueId] || { x: 0, y: 0 };
-                const childOffset = nodeOffsets[child.uniqueId] || { x: 0, y: 0 };
-                const actualX = x + parentOffset.x;
-                const actualY = y + parentOffset.y;
-                const actualChildX = childX + childOffset.x;
-                const actualChildY = childY + childOffset.y;
                 const offset = branchOffsets[branchKey] || { x: 0, y: 0 };
-                const midX = (actualX + actualChildX) / 2 + (spreadFactor * 30) + offset.x;
-                const midY = (actualY + actualChildY) / 2 + offset.y;
+                const curMidX = midX + offset.x;
+                const curMidY = midY + offset.y;
                 return (
                   <circle
-                    cx={midX}
-                    cy={midY}
+                    cx={curMidX}
+                    cy={curMidY}
                     r="8"
                     fill="#d4af37"
                     stroke="#ffffff"
@@ -693,7 +765,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   />
                 );
               })()}
-              {renderSubTreeSVG(child, childX, childY, childSpread, level + 1)}
+              {renderSubTreeSVG(child, childPos?.x || actualChildX, childPos?.y || actualChildY, 0, level + 1)}
             </g>
           );
         })}
@@ -701,7 +773,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
         {/* Member Leaf / Node with Auto-Sizing */}
         {!(level === 1 && settings.hideRootNode) && (
           <g 
-            transform={`translate(${x + (nodeOffsets[member.uniqueId]?.x || 0)}, ${y + (nodeOffsets[member.uniqueId]?.y || 0)})`}
+            transform={`translate(${actualNodeX}, ${actualNodeY})`}
           draggable={true}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -726,12 +798,22 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             e.stopPropagation();
             const draggedSon = e.dataTransfer.getData('text/plain');
             const targetFather = member.name;
-            if (draggedSon && draggedSon !== targetFather) {
+            if (draggedSon && cleanName(draggedSon) !== cleanName(targetFather)) {
               handleReparentNode(draggedSon, targetFather);
+              setSelectedBranch(null);
             }
           }}
           onClick={(e) => {
             e.stopPropagation();
+            if (selectedBranch) {
+              if (cleanName(selectedBranch.childName) === cleanName(member.name)) {
+                alert('لا يمكن ربط الشخص بنفسه.');
+                return;
+              }
+              handleReparentNode(selectedBranch.childName, member.name);
+              setSelectedBranch(null);
+              return;
+            }
             setSelectedPerson(member.uniqueId);
           }}
           onMouseDown={(e) => handleNodeMouseDown(e, member.uniqueId)}
@@ -778,8 +860,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 cy="0"
                 r={dynamicSheikhRadius}
                 fill={nodeGreenFill}
-                stroke={nodeStroke}
-                strokeWidth="4"
+                stroke={isValidBranchTarget ? "#10b981" : nodeStroke}
+                strokeWidth={isValidBranchTarget ? "5" : "4"}
+                strokeDasharray={isValidBranchTarget ? "6 3" : undefined}
                 className="transition-all duration-300 shadow-2xl hover:brightness-110"
               />
               <circle
@@ -809,8 +892,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               rx={dynamicRx}
               ry={dynamicRy}
               fill={nodeGreenFill}
-              stroke={nodeStroke}
-              strokeWidth={isHighlighted ? "2.5" : "1.5"}
+              stroke={isValidBranchTarget ? "#10b981" : (isHighlighted ? "#fbbf24" : nodeStroke)}
+              strokeWidth={isValidBranchTarget ? "3.5" : (isHighlighted ? "2.5" : "1.5")}
+              strokeDasharray={isValidBranchTarget ? "5 3" : undefined}
               className="transition-all duration-300 shadow-md hover:brightness-110"
             />
           ) : (
@@ -819,12 +903,20 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               y={-dynamicRectHeight / 2}
               width={dynamicRectWidth}
               height={dynamicRectHeight}
-              rx={10 * scaleFactor}
+              rx={10}
               fill={nodeGreenFill}
-              stroke={nodeStroke}
-              strokeWidth={isHighlighted ? "2.5" : "1.5"}
+              stroke={isValidBranchTarget ? "#10b981" : (isHighlighted ? "#fbbf24" : nodeStroke)}
+              strokeWidth={isValidBranchTarget ? "3.5" : (isHighlighted ? "2.5" : "1.5")}
+              strokeDasharray={isValidBranchTarget ? "5 3" : undefined}
               className="transition-all duration-300 shadow-md"
             />
+          )}
+
+          {isValidBranchTarget && (
+            <g transform="translate(0, -32)" className="pointer-events-none">
+              <rect x="-44" y="-10" width="88" height="20" rx="10" fill="#047857" stroke="#ffffff" strokeWidth="1.5" className="shadow-lg" />
+              <text x="0" y="4" textAnchor="middle" fill="#ffffff" fontSize="10" fontWeight="bold">انقر للربط هنا</text>
+            </g>
           )}
 
           <text
@@ -1212,6 +1304,28 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       >
         <div className="absolute inset-3 border-2 border-dashed border-[#b89753]/30 pointer-events-none rounded-xl z-10" />
 
+        {/* Floating Active Branch Interaction Banner */}
+        {selectedBranch && (
+          <div className="absolute top-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-stone-900/95 dark:bg-black/95 text-stone-100 px-5 py-2.5 rounded-full shadow-2xl border-2 border-amber-400 backdrop-blur-md animate-in fade-in slide-in-from-top-4 select-none">
+            <span className="flex h-2.5 w-2.5 rounded-full bg-amber-400 animate-ping" />
+            <span className="text-xs font-bold font-amiri">
+              الغصن المحدد: <span className="text-amber-300 font-extrabold text-sm">{selectedBranch.childName}</span> (ابن {selectedBranch.parentName})
+            </span>
+            <span className="text-[11px] text-amber-200 bg-amber-950/70 px-3 py-1 rounded-full border border-amber-500/40">
+              انقر على أي شخص لنقل الغصن وربطه به، أو اسحبه وأفلته
+            </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedBranch(null);
+              }}
+              className="text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1 rounded-full transition-all cursor-pointer border border-stone-600"
+            >
+              إلغاء ✕
+            </button>
+          </div>
+        )}
+
         {/* Floating Zoom & Center Controls Overlay */}
         <div className="absolute bottom-6 left-6 z-20 flex flex-col gap-2 bg-[#fcf8f2]/90 dark:bg-[#1e1915]/90 backdrop-blur-md p-2 rounded-2xl border border-amber-300/60 dark:border-stone-700 shadow-xl">
           <button 
@@ -1253,17 +1367,62 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             {/* Background Parchment Fill */}
             <rect width="3000" height="2200" fill="#fcf7ee" rx="20" />
 
-            {/* Ornate Islamic/Arabic Heritage Border */}
+            <defs>
+              <pattern id="islamic-border" x="0" y="0" width="60" height="30" patternUnits="userSpaceOnUse">
+                <path d="M 30 0 L 60 15 L 30 30 L 0 15 Z" fill="none" stroke="#2b1810" strokeWidth="2.5" />
+                <circle cx="30" cy="15" r="5" fill="#b89753" />
+              </pattern>
+              {/* Inner Heritage Frame Clip Path - strictly contains all nodes and branches inside the designated frame */}
+              <clipPath id="heritageTreeClip">
+                <rect x="58" y="58" width="2884" height="2084" rx="10" />
+              </clipPath>
+            </defs>
+
+            {/* Tree Zoom & Pan Group - strictly contained within designated frame */}
+            <g clipPath="url(#heritageTreeClip)">
+              <g transform={`translate(${1500 + pan.x}, ${1100 + pan.y}) scale(${zoom}) translate(-1500, -1100)`}>
+                {/* Render Family Tree */}
+                {treeData.roots.length > 0 ? (
+                  <g transform="translate(0, 0)">
+                    {treeData.roots.map((rootNode, i) => {
+                      const rootPos = strictLayout.positions.get(rootNode.uniqueId);
+                      const startX = rootPos ? rootPos.x : 1500;
+                      const rootY = rootPos ? rootPos.y : (generationOrder === 'ascending' ? 380 : 1550);
+                      return (
+                        <g key={`root-${rootNode.name}-${i}`}>
+                          {renderSubTreeSVG(rootNode, startX, rootY, 0, 1)}
+                        </g>
+                      );
+                    })}
+                  </g>
+                ) : (
+                  <g transform="translate(1500, 1100)">
+                    <circle
+                      cx="0"
+                      cy="-40"
+                      r="45"
+                      fill="#1b4d2e"
+                      stroke="#d4af37"
+                      strokeWidth="3"
+                      className="cursor-pointer hover:scale-110 transition-transform shadow-2xl"
+                      onClick={() => handleOpenAddParentModal('')}
+                    />
+                    <text x="0" y="-32" textAnchor="middle" fill="#ffffff" fontSize="42" fontWeight="bold" className="cursor-pointer pointer-events-none">+</text>
+                    <text x="0" y="30" textAnchor="middle" fill="#5c3a21" fontSize="22" fontFamily={`'${currentFont}', sans-serif`} fontWeight="bold">
+                      انقر على علامة (+) لإضافة أول جد أو مؤسس للشجرة
+                    </text>
+                  </g>
+                )}
+              </g>
+            </g>
+
+            {/* Ornate Islamic/Arabic Heritage Border (Framing the tree cleanly) */}
             <rect x="25" y="25" width="2950" height="2150" fill="none" stroke="#2b1810" strokeWidth="16" rx="12" />
             <rect x="42" y="42" width="2916" height="2116" fill="none" stroke="#b89753" strokeWidth="4" rx="8" />
             <rect x="52" y="52" width="2896" height="2096" fill="none" stroke="#b89753" strokeWidth="1" rx="6" />
 
             {/* Top & Bottom Ornate Border Patterns */}
             <g fill="#2b1810">
-              <pattern id="islamic-border" x="0" y="0" width="60" height="30" patternUnits="userSpaceOnUse">
-                <path d="M 30 0 L 60 15 L 30 30 L 0 15 Z" fill="none" stroke="#2b1810" strokeWidth="2.5" />
-                <circle cx="30" cy="15" r="5" fill="#b89753" />
-              </pattern>
               <rect x="60" y="28" width="2880" height="18" fill="url(#islamic-border)" />
               <rect x="60" y="2154" width="2880" height="18" fill="url(#islamic-border)" />
               <rect x="28" y="60" width="18" height="2080" fill="url(#islamic-border)" />
@@ -1291,8 +1450,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               </>
             )}
 
-
-
             {/* Bottom Right Vintage Frame with Color Legend */}
             <g transform="translate(2320, 2010)">
               <path d="M 15 0 L 540 0 Q 555 0 555 15 L 555 90 Q 555 105 540 105 L 15 105 Q 0 105 0 90 L 0 15 Q 0 0 15 0 Z" fill="#f5ecdc" stroke="#b89753" strokeWidth="2.5" />
@@ -1303,42 +1460,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               <text x="350" y="70" textAnchor="middle" fill="#1b4d2e" fontSize="12">أستاذ (خط أبيض)</text>
               <text x="220" y="70" textAnchor="middle" fill="#1b4d2e" fontSize="12">متوفي (خط أسود)</text>
               <text x="90" y="70" textAnchor="middle" fill="#ff4d4d" fontSize="12" fontWeight="bold">شهيد (اسم أحمر)</text>
-            </g>
-
-            {/* Tree Zoom Wrapper - scales only the family tree nodes and branches */}
-            <g transform={`translate(1500, 1100) scale(${zoom}) translate(-1500, -1100)`}>
-              {/* Render Family Tree */}
-              {treeData.roots.length > 0 ? (
-                <g transform="translate(0, 0)">
-                  {treeData.roots.map((rootNode, i) => {
-                    const spacing = 2600 / (treeData.roots.length + 1);
-                    const startX = 200 + spacing * (i + 1);
-                    const rootY = generationOrder === 'ascending' ? 400 : 1500;
-                    return (
-                      <g key={`root-${rootNode.name}-${i}`}>
-                        {renderSubTreeSVG(rootNode, startX, rootY, 360, 1)}
-                      </g>
-                    );
-                  })}
-                </g>
-              ) : (
-                <g transform="translate(1500, 1100)">
-                  <circle
-                    cx="0"
-                    cy="-40"
-                    r="45"
-                    fill="#1b4d2e"
-                    stroke="#d4af37"
-                    strokeWidth="3"
-                    className="cursor-pointer hover:scale-110 transition-transform shadow-2xl"
-                    onClick={() => handleOpenAddParentModal('')}
-                  />
-                  <text x="0" y="-32" textAnchor="middle" fill="#ffffff" fontSize="42" fontWeight="bold" className="cursor-pointer pointer-events-none">+</text>
-                  <text x="0" y="30" textAnchor="middle" fill="#5c3a21" fontSize="22" fontFamily={`'${currentFont}', sans-serif`} fontWeight="bold">
-                    انقر على علامة (+) لإضافة أول جد أو مؤسس للشجرة
-                  </text>
-                </g>
-              )}
             </g>
           </svg>
         </div>
