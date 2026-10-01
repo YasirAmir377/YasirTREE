@@ -99,19 +99,30 @@ export function buildFamilyTree(entries: RelationEntry[]): {
 
       if (f === currentName) {
         if (len === 1) {
-          if (!g || g === '' || !ancestorChain.includes(g)) {
-            childSet.add(s);
-          }
+          childSet.add(s);
         } else if (len === 2) {
           const grandfather = ancestorChain[0];
           if (!g || g === '' || g === grandfather) {
             childSet.add(s);
+          } else {
+            const otherFatherWithSameName = entries.some(
+              oe => cleanName(oe.fatherName) === currentName && cleanName(oe.grandfatherName || '') === grandfather
+            );
+            if (!otherFatherWithSameName) {
+              childSet.add(s);
+            }
           }
-        } else if (len >= 3) {
-          const greatGrandfather = ancestorChain[len - 3];
+        } else {
           const grandfather = ancestorChain[len - 2];
-          if ((!gg || gg === '' || gg === greatGrandfather) && (!g || g === '' || g === grandfather)) {
+          if (!g || g === '' || g === grandfather) {
             childSet.add(s);
+          } else {
+            const otherFatherWithSameName = entries.some(
+              oe => cleanName(oe.fatherName) === currentName && cleanName(oe.grandfatherName || '') === grandfather
+            );
+            if (!otherFatherWithSameName) {
+              childSet.add(s);
+            }
           }
         }
       }

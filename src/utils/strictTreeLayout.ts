@@ -16,6 +16,7 @@ export interface StrictTreeLayoutResult {
   maxY: number;
   totalWidth: number;
   totalHeight: number;
+  autoFitScale: number;
   canvasWidth?: number;
   canvasHeight?: number;
 }
@@ -37,54 +38,27 @@ interface SubtreeLayout {
  */
 export function getNodeWidth(name: string): number {
   const len = (name || '').trim().length;
-  // Node width matching dynamicRx (Math.max(56, len * 8.5) * 2) + 16px safety padding
-  return Math.max(128, len * 17 + 24);
+  // Node width matching dynamicRx with safety padding
+  const dynamicRx = Math.max(58, len * 8.8);
+  return Math.round(dynamicRx * 2 + 12);
 }
 
 export function getNodeHeight(): number {
-  return 44;
+  return 42;
 }
 
 /**
- * Computes a mathematically guaranteed non-crossing, non-overlapping tree layout
- * based on the Reingold-Tilford / Walker contour-merging algorithm.
- * 
- * Guarantees:
- * 1. Zero crossing lines: Sibling and cousin subtrees are partitioned into disjoint horizontal spans.
- * 2. Zero node overlaps: Every node on generation g is separated from its neighbors by at least minGap.
+ * Internal single-pass layout calculator for a given minGap and yStep
  */
-export function computeStrictTreeLayout(
+function runLayoutPass(
   roots: FamilyMember[],
-  settings: TreeSettings,
-  generationOrder: 'ascending' | 'descending' = 'ascending'
-): StrictTreeLayoutResult {
-  const positions = new Map<string, NodePosition>();
-
-  if (!roots || roots.length === 0) {
-    return {
-      positions,
-      minX: 1500,
-      maxX: 1500,
-      minY: 1100,
-      maxY: 1100,
-      totalWidth: 0,
-      totalHeight: 0
-    };
-  }
-
-  // Determine horizontal gap between adjacent nodes
-  const hMode = settings.horizontalSpacing || 'normal';
-  let minGap = 55;
-  if (hMode === 'wide') minGap = 95;
-  if (hMode === 'ultra_wide') minGap = 160;
-
-  // Determine vertical spacing per generation
-  const vMode = settings.verticalSpacingMode || 'normal';
-  let vMultiplier = 1.0;
-  if (vMode === 'extended') vMultiplier = 1.4;
-  if (vMode === 'super_extended') vMultiplier = 1.9;
-  const yStep = 150 * vMultiplier;
-
+  minGap: number,
+  yStep: number
+): {
+  rawPositions: Map<string, { relX: number; depth: number; width: number; height: number }>;
+  rawWidth: number;
+  maxDepth: number;
+} {
   // Recursive post-order subtree layout with depth-level contour tracking
   function layoutSubtree(node: FamilyMember): SubtreeLayout {
     const nodeWidth = getNodeWidth(node.name);
@@ -127,7 +101,6 @@ export function computeStrictTreeLayout(
         for (let d = 0; d < maxCommonDepth; d++) {
           const leftBoundOfChild = childLayout.contour[d].left;
           const rightBoundOfCombined = combinedContour[d].right;
-          // We need: (shift + leftBoundOfChild) - rightBoundOfCombined >= minGap
           const depthShift = rightBoundOfCombined - leftBoundOfChild + minGap;
           if (depthShift > requiredShift) {
             requiredShift = depthShift;
@@ -200,7 +173,7 @@ export function computeStrictTreeLayout(
     };
   }
 
-  // Layout all root trees side-by-side using the same contour-pack technique
+  // Layout all root trees side-by-side using contour-packing
   const rootLayouts = roots.map(root => layoutSubtree(root));
   const rootShifts: number[] = [];
   const forestContour: ContourLevel[] = [];
@@ -214,11 +187,11 @@ export function computeStrictTreeLayout(
     } else {
       const prevLayout = rootLayouts[idx - 1];
       const prevShift = rootShifts[idx - 1];
-      let requiredShift = prevShift + (prevLayout.width + rLayout.width) / 2 + minGap * 1.5;
+      let requiredShift = prevShift + (prevLayout.width + rLayout.width) / 2 + minGap * 1.4;
 
       const maxCommonDepth = Math.min(forestContour.length, rLayout.contour.length);
       for (let d = 0; d < maxCommonDepth; d++) {
-        const depthShift = forestContour[d].right - rLayout.contour[d].left + minGap * 1.5;
+        const depthShift = forestContour[d].right - rLayout.contour[d].left + minGap * 1.4;
         if (depthShift > requiredShift) {
           requiredShift = depthShift;
         }
@@ -250,33 +223,120 @@ export function computeStrictTreeLayout(
     });
   });
 
+  let rawMinX = Infinity;
+  let rawMaxX = -Infinity;
+  let maxDepth = 0;
+  combinedRawPositions.forEach(pos => {
+    rawMinX = Math.min(rawMinX, pos.relX - pos.width / 2);
+    rawMaxX = Math.max(rawMaxX, pos.relX + pos.width / 2);
+    maxDepth = Math.max(maxDepth, pos.depth);
+  });
+
+  return {
+    rawPositions: combinedRawPositions,
+    rawWidth: Math.max(10, rawMaxX - rawMinX),
+    maxDepth
+  };
+}
+
+/**
+ * Computes a mathematically guaranteed non-crossing, non-overlapping tree layout
+ * based on the Reingold-Tilford / Walker contour-merging algorithm.
+ * 
+ * Guarantees:
+ * 1. Strict top-to-bottom orientation: Roots at top, children growing downward.
+ * 2. Zero crossing lines: Sibling and cousin subtrees are partitioned into disjoint horizontal spans.
+ * 3. Zero node overlaps: Every node on generation g is separated from its neighbors by at least minGap.
+ * 4. Automatic fit inside the framed box: Compresses spacing and provides autoFitScale.
+ */
+export function computeStrictTreeLayout(
+  roots: FamilyMember[],
+  settings: TreeSettings,
+  generationOrder: 'ascending' | 'descending' = 'ascending'
+): StrictTreeLayoutResult {
+  const positions = new Map<string, NodePosition>();
+
+  if (!roots || roots.length === 0) {
+    return {
+      positions,
+      minX: 1500,
+      maxX: 1500,
+      minY: 1100,
+      maxY: 1100,
+      totalWidth: 0,
+      totalHeight: 0,
+      autoFitScale: 1.0,
+      canvasWidth: 3000,
+      canvasHeight: 2200
+    };
+  }
+
+  // Available decorated inner frame dimensions
+  // Frame inner bounds: x: 60..2940 (width 2880), y: 60..2140 (height 2080)
+  // With comfortable padding:
+  const targetFrameWidth = 2720;
+  const targetFrameHeight = 1760;
+
+  // Determine base horizontal gap between adjacent nodes
+  const hMode = settings.horizontalSpacing || 'normal';
+  let minGap = 44;
+  if (hMode === 'wide') minGap = 72;
+  if (hMode === 'ultra_wide') minGap = 110;
+
+  // Vertical spacing per generation (growing downward)
+  const vMode = settings.verticalSpacingMode || 'normal';
+  let vMultiplier = 1.0;
+  if (vMode === 'extended') vMultiplier = 1.35;
+  if (vMode === 'super_extended') vMultiplier = 1.75;
+  const yStep = 145 * vMultiplier;
+
+  // Pass 1: Run with base minGap
+  let layoutResult = runLayoutPass(roots, minGap, yStep);
+
+  // If width exceeds targetFrameWidth, compress horizontal spacing adaptively
+  if (layoutResult.rawWidth > targetFrameWidth && minGap > 18) {
+    // Calculate compressed gap to fit inside targetFrameWidth if possible
+    const excessRatio = targetFrameWidth / layoutResult.rawWidth;
+    const compressedGap = Math.max(18, Math.floor(minGap * excessRatio));
+    if (compressedGap < minGap) {
+      layoutResult = runLayoutPass(roots, compressedGap, yStep);
+    }
+  }
+
+  const { rawPositions, maxDepth } = layoutResult;
+
   // Calculate horizontal bounds
   let rawMinX = Infinity;
   let rawMaxX = -Infinity;
-  combinedRawPositions.forEach(pos => {
+  rawPositions.forEach(pos => {
     rawMinX = Math.min(rawMinX, pos.relX - pos.width / 2);
     rawMaxX = Math.max(rawMaxX, pos.relX + pos.width / 2);
   });
 
-  const totalWidth = rawMaxX - rawMinX;
   // Center tree horizontally in the 3000px canvas (canvas center is 1500)
   const canvasCenter = 1500;
   const offsetX = canvasCenter - (rawMinX + rawMaxX) / 2;
 
-  // Determine base vertical origin
-  // Ascending: Root ancestors at top (y = 400), children branch downwards (+yStep)
-  // Descending: Root ancestors at bottom (y = 1550), children branch upwards (-yStep)
-  const baseRootY = generationOrder === 'ascending' ? 380 : 1550;
-  const yDirection = generationOrder === 'ascending' ? 1 : -1;
+  // Vertical placement:
+  // generationOrder === 'ascending' => Standard Vertical (Top-to-Bottom: Roots at top, children growing downward)
+  // generationOrder === 'descending' => Inverse Vertical (Bottom-to-Top: Roots at bottom/base, children growing upward)
+  const isAscending = generationOrder === 'ascending';
+  const totalVerticalSpan = maxDepth * yStep;
+  const desiredCenterY = 1100;
+  const baseRootY = isAscending
+    ? Math.max(260, Math.round(desiredCenterY - totalVerticalSpan / 2))
+    : Math.min(1940, Math.round(desiredCenterY + totalVerticalSpan / 2));
 
   let minFinalX = Infinity;
   let maxFinalX = -Infinity;
   let minFinalY = Infinity;
   let maxFinalY = -Infinity;
 
-  combinedRawPositions.forEach((pos, id) => {
+  rawPositions.forEach((pos, id) => {
     const finalX = Math.round(pos.relX + offsetX);
-    const finalY = Math.round(baseRootY + pos.depth * yStep * yDirection);
+    const finalY = isAscending
+      ? Math.round(baseRootY + pos.depth * yStep)
+      : Math.round(baseRootY - pos.depth * yStep);
 
     minFinalX = Math.min(minFinalX, finalX - pos.width / 2);
     maxFinalX = Math.max(maxFinalX, finalX + pos.width / 2);
@@ -292,14 +352,23 @@ export function computeStrictTreeLayout(
     });
   });
 
+  const totalWidth = Math.max(10, maxFinalX - minFinalX);
+  const totalHeight = Math.max(10, maxFinalY - minFinalY);
+
+  // Compute scale required to fit 100% inside the decorated frame
+  const scaleX = targetFrameWidth / totalWidth;
+  const scaleY = targetFrameHeight / totalHeight;
+  const autoFitScale = Math.min(1.0, Math.max(0.15, Number(Math.min(scaleX, scaleY).toFixed(3))));
+
   return {
     positions,
     minX: minFinalX,
     maxX: maxFinalX,
     minY: minFinalY,
     maxY: maxFinalY,
-    totalWidth: maxFinalX - minFinalX,
-    totalHeight: maxFinalY - minFinalY,
+    totalWidth,
+    totalHeight,
+    autoFitScale,
     canvasWidth: 3000,
     canvasHeight: 2200
   };

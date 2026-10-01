@@ -4,7 +4,8 @@ import { cleanName } from '../utils/treeUtils';
 import { computeStrictTreeLayout } from '../utils/strictTreeLayout';
 import { 
   ZoomIn, ZoomOut, RotateCcw, Download, 
-  Search, Sliders, Sparkles, ChevronDown, ChevronUp, FileText, Printer, ArrowUpDown, LayoutGrid 
+  Search, Sliders, Sparkles, ChevronDown, ChevronUp, FileText, Printer, ArrowUpDown, LayoutGrid,
+  ArrowDown, ArrowUp
 } from 'lucide-react';
 
 interface FamilyTreeViewerProps {
@@ -36,56 +37,132 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   onAddChild,
   onDeleteNode
 }) => {
-  // Always center tree on load or when tree data changes
+  const currentFont = settings.fontFamily || 'Amiri';
+  const nameScale = settings.nameFontSizeScale || 1.0;
+  const branchStyle = settings.branchStyle || 'curved';
+  const generationOrder = settings.generationOrder || 'ascending'; // 'ascending' = Top-to-Bottom (standard vertical), 'descending' = Bottom-to-Top (inverted vertical)
+
+  // Compute mathematically guaranteed non-crossing, non-overlapping tree layout
+  const strictLayout = useMemo(() => {
+    return computeStrictTreeLayout(treeData.roots, settings, generationOrder);
+  }, [treeData.roots, settings, generationOrder]);
+
+  const [zoom, setZoom] = useState<number>(() => {
+    return strictLayout.autoFitScale || (typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0);
+  });
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Automatically fit the whole tree inside the frame width:
+  // Recalculates whenever nodes are added, removed, or moved
   useEffect(() => {
-    handleCenterView();
-  }, [treeData.rootsCount, treeData.allPersons.length]);
+    if (strictLayout.autoFitScale) {
+      setZoom(strictLayout.autoFitScale);
+      setPan({ x: 0, y: 0 });
+    }
+  }, [treeData.rootsCount, treeData.allPersons.length, entries.length, strictLayout.autoFitScale]);
+
+  // Recalculate fit on screen / window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (strictLayout.autoFitScale) {
+        setZoom(prev => Math.min(prev, strictLayout.autoFitScale));
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [strictLayout.autoFitScale]);
+
+  // Mouse wheel smooth zoom handler (confined inside container)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+      setZoom(prev => Math.min(3.5, Math.max(0.15, Number((prev * zoomFactor).toFixed(3)))));
+    };
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, []);
 
   const handleReparentNode = (sonName: string, newFatherName: string) => {
     if (!setEntries) return;
-    if (cleanName(sonName) === cleanName(newFatherName)) return;
+    const cleanSon = cleanName(sonName);
+    const cleanNewFather = cleanName(newFatherName);
+    if (!cleanSon || !cleanNewFather || cleanSon === cleanNewFather) return;
 
     // Check circularity: newFatherName cannot be a descendant of sonName
     const descendants = new Set<string>();
-    const queue = [cleanName(sonName)];
+    const queue = [cleanSon];
     while (queue.length > 0) {
       const curr = queue.shift()!;
       descendants.add(curr);
       entries.forEach(e => {
         if (cleanName(e.fatherName) === curr && e.sonName) {
-          const cleanSon = cleanName(e.sonName);
-          if (!descendants.has(cleanSon)) {
-            descendants.add(cleanSon);
-            queue.push(cleanSon);
+          const s = cleanName(e.sonName);
+          if (!descendants.has(s)) {
+            descendants.add(s);
+            queue.push(s);
           }
         }
       });
     }
 
-    if (descendants.has(cleanName(newFatherName))) {
+    if (descendants.has(cleanNewFather)) {
       alert(`عذراً، لا يمكن ربط (${sonName}) بأحد أبنائه أو أحفاده (${newFatherName}) لتجنب التداخل الدائري.`);
       return;
     }
 
+    // Look up new father's ancestry in current entries
+    const newFatherEntry = entries.find(e => cleanName(e.sonName) === cleanNewFather);
+    const newGrandfather = cleanName(newFatherEntry?.fatherName || '');
+    const newGreatGrandfather = cleanName(newFatherEntry?.grandfatherName || '');
+
     setEntries(prev => {
-      const existingIndex = prev.findIndex(e => cleanName(e.sonName) === cleanName(sonName));
-      if (existingIndex >= 0) {
-        const updated = [...prev];
-        updated[existingIndex] = {
-          ...updated[existingIndex],
-          fatherName: newFatherName
-        };
-        return updated;
-      } else {
+      const exists = prev.some(e => cleanName(e.sonName) === cleanSon);
+      let updated = prev.map(entry => {
+        // 1. Update the son's direct entry
+        if (cleanName(entry.sonName) === cleanSon) {
+          return {
+            ...entry,
+            fatherName: newFatherName,
+            grandfatherName: newGrandfather,
+            greatGrandfatherName: newGreatGrandfather
+          };
+        }
+        // 2. Update downstream children of sonName
+        if (cleanName(entry.fatherName) === cleanSon) {
+          return {
+            ...entry,
+            grandfatherName: newFatherName,
+            greatGrandfatherName: newGrandfather
+          };
+        }
+        // 3. Update downstream grandchildren of sonName
+        if (cleanName(entry.grandfatherName) === cleanSon) {
+          return {
+            ...entry,
+            greatGrandfatherName: newFatherName
+          };
+        }
+        return entry;
+      });
+
+      if (!exists) {
         const nextId = prev.length > 0 ? (Math.max(...prev.map(item => parseInt(item.id) || 0)) + 1).toString() : '1';
         const newEntry: RelationEntry = {
           id: nextId,
           sonName: sonName,
           fatherName: newFatherName,
+          grandfatherName: newGrandfather,
+          greatGrandfatherName: newGreatGrandfather,
           createdAt: new Date().toISOString()
         };
-        return [...prev, newEntry];
+        updated = [...updated, newEntry];
       }
+
+      return updated;
     });
 
     setNodeOffsets({});
@@ -95,6 +172,10 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const [showAddChildModal, setShowAddChildModal] = useState<boolean>(false);
   const [showAddParentModal, setShowAddParentModal] = useState<boolean>(false);
   const [showRenameModal, setShowRenameModal] = useState<boolean>(false);
+  const [showInsertModal, setShowInsertModal] = useState<boolean>(false);
+  const [insertBranchInfo, setInsertBranchInfo] = useState<{ parentName: string; childName: string } | null>(null);
+  const [insertPersonName, setInsertPersonName] = useState<string>('');
+  const [insertPersonTags, setInsertPersonTags] = useState<string[]>([]);
   const [renameTargetName, setRenameTargetName] = useState<string>('');
   const [newEditedName, setNewEditedName] = useState<string>('');
   const [contextMenu, setContextMenu] = useState<{
@@ -167,6 +248,96 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       onAddChild(newParentName.trim(), targetPersonName, []);
       setShowAddParentModal(false);
     }
+  };
+
+  const handleConfirmInsertPerson = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!insertBranchInfo || !insertPersonName.trim() || !setEntries) return;
+
+    const parentName = insertBranchInfo.parentName.trim();
+    const childName = insertBranchInfo.childName.trim();
+    const newName = insertPersonName.trim();
+
+    const cleanP = cleanName(parentName);
+    const cleanC = cleanName(childName);
+    const cleanN = cleanName(newName);
+
+    if (cleanN === cleanP || cleanN === cleanC) {
+      alert('لا يمكن أن يكون اسم الشخص الجديد متطابقاً مع اسم الأب أو الابن.');
+      return;
+    }
+
+    // Look up parent's ancestry
+    const parentEntry = entries.find(entry => cleanName(entry.sonName) === cleanP);
+    const parentFather = cleanName(parentEntry?.fatherName || '');
+    const parentGrandfather = cleanName(parentEntry?.grandfatherName || '');
+
+    // 1. Create entry for newPerson as child of parentName
+    const newPersonId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const newPersonEntry: RelationEntry = {
+      id: newPersonId,
+      sonName: newName,
+      fatherName: parentName,
+      grandfatherName: parentFather,
+      greatGrandfatherName: parentGrandfather,
+      tags: insertPersonTags,
+      createdAt: new Date().toISOString()
+    };
+
+    // 2. Update entries so childName now has newName as fatherName
+    setEntries(prev => {
+      const childExists = prev.some(e => cleanName(e.sonName) === cleanC);
+      let updated = prev.map(entry => {
+        // Update childName's direct entry
+        if (cleanName(entry.sonName) === cleanC) {
+          return {
+            ...entry,
+            fatherName: newName,
+            grandfatherName: parentName,
+            greatGrandfatherName: parentFather
+          };
+        }
+        // Update downstream children of childName
+        if (cleanName(entry.fatherName) === cleanC) {
+          return {
+            ...entry,
+            grandfatherName: newName,
+            greatGrandfatherName: parentName
+          };
+        }
+        // Update downstream grandchildren of childName
+        if (cleanName(entry.grandfatherName) === cleanC) {
+          return {
+            ...entry,
+            greatGrandfatherName: newName
+          };
+        }
+        return entry;
+      });
+
+      if (!childExists) {
+        const childId = `entry-${Date.now() + 1}-${Math.random().toString(36).substring(2, 6)}`;
+        updated.push({
+          id: childId,
+          sonName: childName,
+          fatherName: newName,
+          grandfatherName: parentName,
+          greatGrandfatherName: parentFather,
+          createdAt: new Date().toISOString()
+        });
+      }
+
+      // Add the new person entry
+      return [newPersonEntry, ...updated];
+    });
+
+    setNodeOffsets({});
+    setBranchOffsets({});
+    setSelectedBranch(null);
+    setShowInsertModal(false);
+    setInsertBranchInfo(null);
+    setInsertPersonName('');
+    setInsertPersonTags([]);
   };
   const [nodeOffsets, setNodeOffsets] = useState<Record<string, { x: number; y: number }>>({});
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null);
@@ -250,13 +421,11 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     setDraggingNodeId(null);
   };
 
-  const containerRef = useRef<HTMLDivElement>(null);
-
   const handleAutoLayout = () => {
     setNodeOffsets({});
     setBranchOffsets({});
     setPan({ x: 0, y: 0 });
-    setZoom(1.0);
+    setZoom(strictLayout.autoFitScale || 1.0);
     if (containerRef.current) {
       containerRef.current.scrollTo({
         left: (containerRef.current.scrollWidth - containerRef.current.clientWidth) / 2,
@@ -265,8 +434,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       });
     }
   };
-  const [zoom, setZoom] = useState<number>(() => (typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0)); // Standard starting at 100% (or 45% on mobile)
-  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [initialPinchDist, setInitialPinchDist] = useState<number | null>(null);
   const [initialZoomOnPinch, setInitialZoomOnPinch] = useState<number>(1.0);
   const [isPanning, setIsPanning] = useState<boolean>(false);
@@ -400,14 +567,14 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     }
   };
 
-  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.15, 3.0));
-  const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.15, 0.3));
+  const handleZoomIn = () => setZoom(prev => Math.min(Number((prev + 0.15).toFixed(2)), 3.5));
+  const handleZoomOut = () => setZoom(prev => Math.max(Number((prev - 0.15).toFixed(2)), 0.25));
   const handleResetZoom = () => {
-    setZoom(1.0); // Reset to standard 100%
+    setZoom(strictLayout.autoFitScale || 1.0);
     setPan({ x: 0, y: 0 });
   };
   const handleCenterView = () => {
-    setZoom(typeof window !== 'undefined' && window.innerWidth < 768 ? 0.45 : 1.0);
+    setZoom(strictLayout.autoFitScale || 1.0);
     setPan({ x: 0, y: 0 });
     setNodeOffsets({});
     setBranchOffsets({});
@@ -489,16 +656,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     window.print();
   };
 
-  const currentFont = settings.fontFamily || 'Amiri';
-  const nameScale = settings.nameFontSizeScale || 1.0;
-  const branchStyle = settings.branchStyle || 'curved';
-  const generationOrder = settings.generationOrder || 'descending';
-
-  // Compute mathematically guaranteed non-crossing, non-overlapping tree layout
-  const strictLayout = useMemo(() => {
-    return computeStrictTreeLayout(treeData.roots, settings, generationOrder);
-  }, [treeData.roots, settings, generationOrder]);
-
   // Helper functions for member tags checking
   const getMemberTags = (name: string): string[] => {
     const entry = entries.find(e => 
@@ -549,8 +706,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   };
 
   const getBranchPath = (parentId: string, childId: string, actualX: number, actualY: number, actualChildX: number, actualChildY: number) => {
-    const startYOffset = generationOrder === 'ascending' ? 22 : -22;
-    const endYOffset = generationOrder === 'ascending' ? -22 : 22;
+    const isTopToBottom = actualChildY >= actualY;
+    const startYOffset = isTopToBottom ? 22 : -22;
+    const endYOffset = isTopToBottom ? -22 : 22;
 
     if (branchStyle === 'straight') {
       return `M ${actualX} ${actualY + startYOffset} L ${actualChildX} ${actualChildY + endYOffset}`;
@@ -694,7 +852,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   setSelectedBranch({ parentName: member.name, childName: child.name });
                 }}
               />
-              {/* Selected Branch Action Badge with Move Handle & Delete */}
+              {/* Selected Branch Action Badge with Midpoint "+" Button, Move Handle & Disconnect */}
               {isBranchSelected && (
                 <g 
                   transform={`translate(${midX}, ${midY})`}
@@ -702,16 +860,38 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   onClick={(e) => e.stopPropagation()}
                 >
                   <rect
-                    x="-70"
-                    y="-20"
-                    width="140"
-                    height="40"
-                    rx="20"
-                    fill="#1e1814"
+                    x="-125"
+                    y="-21"
+                    width="250"
+                    height="42"
+                    rx="21"
+                    fill="#1b1511"
                     stroke="#f59e0b"
                     strokeWidth="2.5"
-                    className="shadow-2xl"
+                    className="shadow-2xl drop-shadow-xl"
                   />
+
+                  {/* "+" Button to Insert Missing Person in the middle of this branch */}
+                  <g
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInsertBranchInfo({ parentName: member.name, childName: child.name });
+                      setInsertPersonName('');
+                      setInsertPersonTags([]);
+                      setShowInsertModal(true);
+                    }}
+                    title={`إدراج شخص مفقود في منتصف هذا الغصن (بين ${member.name} و ${child.name})`}
+                    className="cursor-pointer hover:scale-115 transition-transform"
+                    transform="translate(-75, 0)"
+                  >
+                    <circle cx="0" cy="0" r="14" fill="#059669" stroke="#ffffff" strokeWidth="2" className="shadow-lg" />
+                    <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="18" fontWeight="bold">+</text>
+                    <text x="36" y="4" textAnchor="middle" fill="#34d399" fontSize="11" fontWeight="bold">إدراج شخص</text>
+                  </g>
+
+                  {/* Divider line */}
+                  <line x1="8" y1="-12" x2="8" y2="12" stroke="#4a3b2f" strokeWidth="1.5" />
+
                   {/* Draggable re-attach handle */}
                   <g
                     draggable={true}
@@ -721,28 +901,26 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                       e.stopPropagation();
                     }}
                     title="اسحب هذا المقبض وأفلته فوق أي شخص لربط الغصن به، أو انقر على اسم الأب الجديد مباشرة"
-                    className="cursor-grab active:cursor-grabbing hover:scale-110 transition-transform"
-                    transform="translate(-32, 0)"
+                    className="cursor-grab active:cursor-grabbing hover:scale-115 transition-transform"
+                    transform="translate(38, 0)"
                   >
-                    <circle cx="0" cy="0" r="14" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.5" />
-                    <path d="M -5 -3 L 0 -8 L 5 -3 M 0 -7 L 0 7 M -5 3 L 0 8 L 5 3" stroke="#1e1814" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                    <circle cx="0" cy="0" r="13" fill="#f59e0b" stroke="#ffffff" strokeWidth="1.5" />
+                    <path d="M -4 -2.5 L 0 -6.5 L 4 -2.5 M 0 -6 L 0 6 M -4 2.5 L 0 6.5 L 4 2.5" stroke="#1e1814" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                    <text x="24" y="4" textAnchor="middle" fill="#fef3c7" fontSize="11" fontWeight="bold">نقل</text>
                   </g>
-                  {/* Label */}
-                  <text x="5" y="4" textAnchor="middle" fill="#fef3c7" fontSize="11" fontWeight="bold" pointerEvents="none">
-                    انقل الغصن
-                  </text>
-                  {/* Delete button */}
+
+                  {/* Disconnect button */}
                   <g
                     onClick={(e) => {
                       e.stopPropagation();
                       handleRemoveBranchRelation(child.name, member.name);
                     }}
                     title="فصل هذا الغصن وتحويله إلى شجرة مستقلة"
-                    className="cursor-pointer hover:scale-110 transition-transform"
-                    transform="translate(42, 0)"
+                    className="cursor-pointer hover:scale-115 transition-transform"
+                    transform="translate(95, 0)"
                   >
-                    <circle cx="0" cy="0" r="13" fill="#dc2626" stroke="#ffffff" strokeWidth="1.5" />
-                    <text x="0" y="5" textAnchor="middle" fill="#ffffff" fontSize="16" fontWeight="bold">×</text>
+                    <circle cx="0" cy="0" r="12" fill="#dc2626" stroke="#ffffff" strokeWidth="1.5" />
+                    <text x="0" y="4.5" textAnchor="middle" fill="#ffffff" fontSize="15" fontWeight="bold">×</text>
                   </g>
                 </g>
               )}
@@ -810,13 +988,20 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 alert('لا يمكن ربط الشخص بنفسه.');
                 return;
               }
+              if (cleanName(selectedBranch.parentName) === cleanName(member.name)) {
+                alert(`(${selectedBranch.childName}) مرتبط بالفعل كابن لـ (${member.name}).`);
+                setSelectedBranch(null);
+                return;
+              }
               handleReparentNode(selectedBranch.childName, member.name);
-              setSelectedBranch(null);
               return;
             }
             setSelectedPerson(member.uniqueId);
           }}
-          onMouseDown={(e) => handleNodeMouseDown(e, member.uniqueId)}
+          onMouseDown={(e) => {
+            if (selectedBranch) return; // In branch move mode, prioritize click to re-attach
+            handleNodeMouseDown(e, member.uniqueId);
+          }}
           onTouchStart={(e) => {
             handleNodeTouchStart(e, member.uniqueId);
             touchMovedRef.current = false;
@@ -999,15 +1184,14 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Quick toggle generation order button */}
-          <button
-            onClick={() => setSettings(prev => ({ ...prev, generationOrder: prev.generationOrder === 'ascending' ? 'descending' : 'ascending' }))}
-            className="flex items-center gap-1.5 bg-amber-800 hover:bg-amber-900 text-amber-100 text-xs font-medium px-3.5 py-2 rounded-xl border border-amber-600 transition-all cursor-pointer"
-            title="تبديل ترتيب الأجيال (تصاعدي / تنازلي)"
+          {/* Top-to-Bottom vertical orientation indicator */}
+          <div
+            className="flex items-center gap-1.5 bg-amber-900/80 text-amber-100 text-xs font-medium px-3.5 py-2 rounded-xl border border-amber-600/70 shadow-xs select-none"
+            title="الهيكل الرأسي: الجذور بالأعلى وتنمو الأجيال للأسفل"
           >
             <ArrowUpDown className="w-4 h-4 text-amber-300" />
-            <span>{generationOrder === 'ascending' ? 'الترتيب: تصاعدي' : 'الترتيب: تنازلي'}</span>
-          </button>
+            <span>الهيكل: رأسي (من الأعلى للأسفل)</span>
+          </div>
 
           <button
             onClick={() => setShowSettingsPanel(prev => !prev)}
@@ -1039,6 +1223,19 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               onChange={e => setSettings(prev => ({ ...prev, title: e.target.value }))}
               className="w-full px-3 py-1.5 bg-white dark:bg-[#15110e] border border-stone-300 dark:border-stone-700 rounded-lg text-xs"
             />
+          </div>
+
+          {/* Structure Mode Options: Vertical or Inverted Vertical */}
+          <div>
+            <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">خيارات الهيكل واتجاه النمو</label>
+            <select
+              value={settings.generationOrder || 'ascending'}
+              onChange={e => setSettings(prev => ({ ...prev, generationOrder: e.target.value as 'ascending' | 'descending' }))}
+              className="w-full px-3 py-1.5 bg-white dark:bg-[#15110e] border border-stone-300 dark:border-stone-700 rounded-lg text-xs font-medium"
+            >
+              <option value="ascending">هيكل رأسي (من الأعلى للأسفل - الجد بالأعلى)</option>
+              <option value="descending">عكس الرأسي (من الأسفل للأعلى - الجد بالقاعدة)</option>
+            </select>
           </div>
 
           <div>
@@ -1191,6 +1388,35 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto justify-start lg:justify-end overflow-x-auto pb-1 lg:pb-0">
+          {/* Structure Orientation Options: Vertical or Inverted Vertical */}
+          <div className="flex items-center gap-1 bg-[#fcf8f2] dark:bg-[#2a231d] rounded-lg border border-amber-300/80 dark:border-[#483d31] p-0.5 shrink-0 shadow-xs">
+            <span className="text-[11px] font-bold text-amber-950 dark:text-amber-200 px-1.5">الهيكل:</span>
+            <button
+              onClick={() => setSettings(prev => ({ ...prev, generationOrder: 'ascending' }))}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                (settings.generationOrder || 'ascending') === 'ascending'
+                  ? 'bg-amber-800 text-white shadow-xs'
+                  : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
+              }`}
+              title="هيكل رأسي: يبدأ بالأجداد في الأعلى ويتفرع هبوطاً للأبناء"
+            >
+              <ArrowDown className="w-3.5 h-3.5" />
+              <span>رأسي (أعلى)</span>
+            </button>
+            <button
+              onClick={() => setSettings(prev => ({ ...prev, generationOrder: 'descending' }))}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                settings.generationOrder === 'descending'
+                  ? 'bg-amber-800 text-white shadow-xs'
+                  : 'text-stone-600 dark:text-stone-300 hover:text-stone-900 dark:hover:text-white'
+              }`}
+              title="عكس الرأسي: يبدأ بالأجداد في القاعدة بالأسفل ويتفرع صعوداً للأعلى"
+            >
+              <ArrowUp className="w-3.5 h-3.5" />
+              <span>عكس الرأسي (أسفل)</span>
+            </button>
+          </div>
+
           {/* Name Font Size Scale Controls (A- / A+) */}
           <div className="flex items-center gap-1 bg-[#fcf8f2] dark:bg-[#2a231d] rounded-lg border border-stone-300 dark:border-[#483d31] px-2 py-1 shrink-0">
             <span className="text-[11px] font-bold text-stone-600 dark:text-stone-300">حجم الأسماء:</span>
@@ -1242,10 +1468,10 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <button
               onClick={handleCenterView}
               className="flex items-center gap-1 bg-amber-800 hover:bg-amber-900 text-amber-100 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer border border-amber-600 whitespace-nowrap"
-              title="توسيط الشجرة بالمنتصف وإعادة التعيين"
+              title="ملاءمة الشجرة بالكامل داخل الإطار وتوسيطها تلقائياً"
             >
               <RotateCcw className="w-3.5 h-3.5 text-amber-300" />
-              <span>توسيط الشجرة بالمنتصف</span>
+              <span>ملاءمة وتوسيط داخل الإطار</span>
             </button>
             <button onClick={handleAutoLayout} className="flex items-center gap-1 bg-[#5c3a21] hover:bg-[#4a2e1a] text-white px-2.5 py-1.5 rounded-lg text-xs font-medium shadow cursor-pointer whitespace-nowrap" title="إعادة ترتيب الشجرة تلقائياً ومنع التداخل">
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -1311,8 +1537,22 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <span className="text-xs font-bold font-amiri">
               الغصن المحدد: <span className="text-amber-300 font-extrabold text-sm">{selectedBranch.childName}</span> (ابن {selectedBranch.parentName})
             </span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setInsertBranchInfo({ parentName: selectedBranch.parentName, childName: selectedBranch.childName });
+                setInsertPersonName('');
+                setInsertPersonTags([]);
+                setShowInsertModal(true);
+              }}
+              className="flex items-center gap-1.5 text-xs text-emerald-950 bg-emerald-400 hover:bg-emerald-300 font-bold px-3 py-1 rounded-full transition-all cursor-pointer shadow hover:scale-105"
+              title="إدراج شخص مفقود بينهما في منتصف الغصن"
+            >
+              <span className="text-sm font-extrabold">+</span>
+              <span>إدراج شخص بالمنتصف</span>
+            </button>
             <span className="text-[11px] text-amber-200 bg-amber-950/70 px-3 py-1 rounded-full border border-amber-500/40">
-              انقر على أي شخص لنقل الغصن وربطه به، أو اسحبه وأفلته
+              أو انقر على أي اسم لنقل الغصن إليه
             </span>
             <button
               onClick={(e) => {
@@ -1449,6 +1689,20 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 </g>
               </>
             )}
+
+            {/* Center Top Vintage Title Banner */}
+            <g transform="translate(1500, 115)">
+              <rect x="-320" y="-42" width="640" height="84" rx="20" fill="#f5ecdc" stroke="#b89753" strokeWidth="3" />
+              <rect x="-310" y="-34" width="620" height="68" rx="14" fill="none" stroke="#b89753" strokeWidth="1" strokeDasharray="4 3" />
+              <text x="0" y="6" textAnchor="middle" fill="#2b1810" fontSize="28" fontFamily={`'${currentFont}', serif`} fontWeight="bold">
+                {settings.title || 'شجرة العائلة الكريمة'}
+              </text>
+              {settings.subtitle && (
+                <text x="0" y="26" textAnchor="middle" fill="#8c6239" fontSize="13" fontFamily={`'${currentFont}', sans-serif`}>
+                  {settings.subtitle}
+                </text>
+              )}
+            </g>
 
             {/* Bottom Right Vintage Frame with Color Legend */}
             <g transform="translate(2320, 2010)">
@@ -1625,6 +1879,105 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   className="px-5 py-2 bg-emerald-800 hover:bg-emerald-900 text-emerald-100 rounded-xl text-xs font-bold transition-all cursor-pointer shadow"
                 >
                   إضافة أب أعلى
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Insert Missing Person in the Middle of Branch Modal */}
+      {showInsertModal && insertBranchInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="bg-[#fcf8f2] dark:bg-[#1e1915] border border-amber-300 dark:border-[#483d31] rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-amber-200/80 dark:border-stone-700 pb-3">
+              <h3 className="text-lg font-bold font-amiri text-amber-950 dark:text-amber-100 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-emerald-700 text-white flex items-center justify-center text-sm font-bold">+</span>
+                إدراج شخص مفقود في منتصف الغصن
+              </h3>
+              <button
+                onClick={() => setShowInsertModal(false)}
+                className="text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-amber-100/60 dark:bg-amber-950/40 p-3 rounded-xl border border-amber-300/60 text-xs text-stone-700 dark:text-stone-300 space-y-1">
+              <p className="font-semibold text-amber-900 dark:text-amber-200">
+                موقع الإدراج في شجرة العائلة:
+              </p>
+              <div className="flex items-center gap-2 font-bold text-stone-800 dark:text-stone-100 pt-1 flex-wrap">
+                <span className="bg-stone-200 dark:bg-stone-800 px-2 py-0.5 rounded">{insertBranchInfo.parentName} (الأعلى)</span>
+                <span>←</span>
+                <span className="bg-emerald-600 text-white px-2.5 py-0.5 rounded shadow-xs">الشخص الجديد</span>
+                <span>←</span>
+                <span className="bg-stone-200 dark:bg-stone-800 px-2 py-0.5 rounded">{insertBranchInfo.childName} (الأسفل)</span>
+              </div>
+              <p className="text-[11px] text-stone-500 dark:text-stone-400 pt-1">
+                سيكون الشخص الجديد ابناً لـ ({insertBranchInfo.parentName}) ووالداً لـ ({insertBranchInfo.childName}).
+              </p>
+            </div>
+
+            <form onSubmit={handleConfirmInsertPerson} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">
+                  اسم الشخص الجديد <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={insertPersonName}
+                  onChange={(e) => setInsertPersonName(e.target.value)}
+                  placeholder="مثال: عبد الله، سالم، حسن..."
+                  className="w-full px-3 py-2 bg-white dark:bg-[#15110e] border border-amber-300 dark:border-stone-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-600 font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1.5">
+                  الصفات والمهن (اختياري)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {AVAILABLE_TAG_OPTIONS.map((tag) => {
+                    const isSelected = insertPersonTags.includes(tag);
+                    return (
+                      <button
+                        type="button"
+                        key={tag}
+                        onClick={() => {
+                          setInsertPersonTags(prev => 
+                            prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                          );
+                        }}
+                        className={`text-xs px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                          isSelected 
+                            ? 'bg-amber-700 border-amber-800 text-white shadow-xs'
+                            : 'bg-white dark:bg-stone-800 border-stone-300 dark:border-stone-700 text-stone-700 dark:text-stone-300 hover:bg-amber-50'
+                        }`}
+                      >
+                        {tag} {isSelected && '✓'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-amber-200/80 dark:border-stone-700">
+                <button
+                  type="button"
+                  onClick={() => setShowInsertModal(false)}
+                  className="px-4 py-2 bg-stone-200 dark:bg-stone-800 hover:bg-stone-300 text-stone-700 dark:text-stone-300 rounded-xl text-xs font-medium cursor-pointer"
+                >
+                  إلغاء
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold cursor-pointer shadow flex items-center gap-1.5"
+                >
+                  <span className="font-extrabold text-sm">+</span>
+                  <span>إدراج في الغصن وحفظ</span>
                 </button>
               </div>
             </form>
