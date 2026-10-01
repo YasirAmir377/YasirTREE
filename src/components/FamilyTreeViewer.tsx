@@ -23,8 +23,8 @@ interface FamilyTreeViewerProps {
   onSwitchToEntries: () => void;
   settings: TreeSettings;
   setSettings: React.Dispatch<React.SetStateAction<TreeSettings>>;
-  onAddChild: (fatherName: string, sonName: string, tags?: string[]) => void;
-  onDeleteNode: (personName: string) => void;
+  onAddChild: (fatherIdOrName: string, sonName: string, tags?: string[], parentId?: string) => void;
+  onDeleteNode: (personIdOrName: string, displayName?: string) => void;
 }
 
 export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
@@ -86,80 +86,73 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     return () => container.removeEventListener('wheel', onWheel);
   }, []);
 
-  const handleReparentNode = (sonName: string, newFatherName: string) => {
+  const handleReparentNode = (sonId: string, targetFatherId: string, targetFatherName: string) => {
     if (!setEntries) return;
-    const cleanSon = cleanName(sonName);
-    const cleanNewFather = cleanName(newFatherName);
-    if (!cleanSon || !cleanNewFather || cleanSon === cleanNewFather) return;
+    if (!sonId || !targetFatherId || sonId === targetFatherId) return;
 
-    // Check circularity: newFatherName cannot be a descendant of sonName
+    // Check circularity strictly by ID: targetFatherId cannot be a descendant of sonId
     const descendants = new Set<string>();
-    const queue = [cleanSon];
+    const queue = [sonId];
     while (queue.length > 0) {
-      const curr = queue.shift()!;
-      descendants.add(curr);
+      const currId = queue.shift()!;
+      descendants.add(currId);
       entries.forEach(e => {
-        if (cleanName(e.fatherName) === curr && e.sonName) {
-          const s = cleanName(e.sonName);
-          if (!descendants.has(s)) {
-            descendants.add(s);
-            queue.push(s);
-          }
+        const pid = e.personId || e.id;
+        if (e.parentId === currId && !descendants.has(pid)) {
+          descendants.add(pid);
+          queue.push(pid);
         }
       });
     }
 
-    if (descendants.has(cleanNewFather)) {
-      alert(`عذراً، لا يمكن ربط (${sonName}) بأحد أبنائه أو أحفاده (${newFatherName}) لتجنب التداخل الدائري.`);
+    if (descendants.has(targetFatherId)) {
+      alert('عذراً، لا يمكن ربط الشخص بأحد أبنائه أو أحفاده لتجنب التداخل الدائري.');
       return;
     }
 
-    // Look up new father's ancestry in current entries
-    const newFatherEntry = entries.find(e => cleanName(e.sonName) === cleanNewFather);
-    const newGrandfather = cleanName(newFatherEntry?.fatherName || '');
-    const newGreatGrandfather = cleanName(newFatherEntry?.grandfatherName || '');
+    // Look up target father's ancestry
+    const fatherEntry = entries.find(e => (e.personId || e.id) === targetFatherId);
+    const newGrandfather = fatherEntry?.fatherName || '';
+    const newGreatGrandfather = fatherEntry?.grandfatherName || '';
 
     setEntries(prev => {
-      const exists = prev.some(e => cleanName(e.sonName) === cleanSon);
-      let updated = prev.map(entry => {
-        // 1. Update the son's direct entry
-        if (cleanName(entry.sonName) === cleanSon) {
+      let found = false;
+      const updated = prev.map(entry => {
+        const pid = entry.personId || entry.id;
+        // Update direct child
+        if (pid === sonId) {
+          found = true;
           return {
             ...entry,
-            fatherName: newFatherName,
+            parentId: targetFatherId,
+            fatherName: targetFatherName,
             grandfatherName: newGrandfather,
             greatGrandfatherName: newGreatGrandfather
           };
         }
-        // 2. Update downstream children of sonName
-        if (cleanName(entry.fatherName) === cleanSon) {
+        // Update downstream children
+        if (entry.parentId === sonId) {
           return {
             ...entry,
-            grandfatherName: newFatherName,
+            grandfatherName: targetFatherName,
             greatGrandfatherName: newGrandfather
-          };
-        }
-        // 3. Update downstream grandchildren of sonName
-        if (cleanName(entry.grandfatherName) === cleanSon) {
-          return {
-            ...entry,
-            greatGrandfatherName: newFatherName
           };
         }
         return entry;
       });
 
-      if (!exists) {
+      if (!found) {
         const nextId = prev.length > 0 ? (Math.max(...prev.map(item => parseInt(item.id) || 0)) + 1).toString() : '1';
-        const newEntry: RelationEntry = {
+        updated.push({
           id: nextId,
-          sonName: sonName,
-          fatherName: newFatherName,
+          personId: sonId,
+          parentId: targetFatherId,
+          sonName: 'فرد',
+          fatherName: targetFatherName,
           grandfatherName: newGrandfather,
           greatGrandfatherName: newGreatGrandfather,
           createdAt: new Date().toISOString()
-        };
-        updated = [...updated, newEntry];
+        });
       }
 
       return updated;
@@ -173,9 +166,10 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
   const [showAddParentModal, setShowAddParentModal] = useState<boolean>(false);
   const [showRenameModal, setShowRenameModal] = useState<boolean>(false);
   const [showInsertModal, setShowInsertModal] = useState<boolean>(false);
-  const [insertBranchInfo, setInsertBranchInfo] = useState<{ parentName: string; childName: string } | null>(null);
+  const [insertBranchInfo, setInsertBranchInfo] = useState<{ parentId: string; childId: string; parentName: string; childName: string } | null>(null);
   const [insertPersonName, setInsertPersonName] = useState<string>('');
   const [insertPersonTags, setInsertPersonTags] = useState<string[]>([]);
+  const [renameTargetId, setRenameTargetId] = useState<string>('');
   const [renameTargetName, setRenameTargetName] = useState<string>('');
   const [newEditedName, setNewEditedName] = useState<string>('');
   const [contextMenu, setContextMenu] = useState<{
@@ -195,7 +189,9 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     return () => window.removeEventListener('click', handleClickOutside);
   }, [contextMenu.visible]);
 
+  const [addingFatherId, setAddingFatherId] = useState<string>('');
   const [addingFatherName, setAddingFatherName] = useState<string>('');
+  const [targetPersonId, setTargetPersonId] = useState<string>('');
   const [targetPersonName, setTargetPersonName] = useState<string>('');
   const [newChildName, setNewChildName] = useState<string>('');
   const [newParentName, setNewParentName] = useState<string>('');
@@ -203,49 +199,77 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
   const AVAILABLE_TAG_OPTIONS = ['شهيد', 'طبيب', 'ضابط', 'شيخ', 'تدريسي', 'معلم', 'متوفي'];
 
-  const handleOpenAddModal = (fatherName: string) => {
+  const handleOpenAddModal = (fatherId: string, fatherName: string) => {
+    setAddingFatherId(fatherId);
     setAddingFatherName(fatherName);
     setNewChildName('');
     setSelectedChildTags([]);
     setShowAddChildModal(true);
   };
 
-  const handleOpenAddParentModal = (personName: string) => {
+  const handleOpenAddParentModal = (personId: string, personName: string) => {
+    setTargetPersonId(personId);
     setTargetPersonName(personName);
     setNewParentName('');
     setShowAddParentModal(true);
   };
 
-  const handleOpenRenameModal = (name: string) => {
+  const handleOpenRenameModal = (personId: string, name: string) => {
+    setRenameTargetId(personId);
     setRenameTargetName(name);
     setNewEditedName(name);
     setShowRenameModal(true);
   };
 
-  const handleRenameNode = (oldName: string, newName: string) => {
+  const handleRenameNode = (personId: string, newName: string) => {
     if (!setEntries) return;
-    if (!newName.trim() || newName.trim() === oldName) return;
+    if (!newName.trim()) return;
     const trimmed = newName.trim();
-    setEntries(prev => prev.map(e => ({
-      ...e,
-      sonName: e.sonName === oldName ? trimmed : e.sonName,
-      fatherName: e.fatherName === oldName ? trimmed : e.fatherName
-    })));
+    setEntries(prev => prev.map(e => {
+      const pid = e.personId || e.id;
+      if (pid === personId) {
+        return { ...e, sonName: trimmed };
+      }
+      if (e.parentId === personId) {
+        return { ...e, fatherName: trimmed };
+      }
+      return e;
+    }));
   };
 
   const handleConfirmAddChild = (e: React.FormEvent) => {
     e.preventDefault();
     if (newChildName.trim() && addingFatherName) {
-      onAddChild(addingFatherName, newChildName.trim(), selectedChildTags);
+      onAddChild(addingFatherName, newChildName.trim(), selectedChildTags, addingFatherId);
       setShowAddChildModal(false);
     }
   };
 
   const handleConfirmAddParent = (e: React.FormEvent) => {
     e.preventDefault();
-    if (newParentName.trim() && targetPersonName) {
-      // Adding a parent (grandpa/father) above this person: newParentName is father of targetPersonName
-      onAddChild(newParentName.trim(), targetPersonName, []);
+    if (newParentName.trim() && targetPersonId) {
+      const newParentId = `p-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const newParentEntry: RelationEntry = {
+        id: `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        personId: newParentId,
+        sonName: newParentName.trim(),
+        fatherName: '',
+        createdAt: new Date().toISOString()
+      };
+      setEntries(prev => {
+        const updated = prev.map(e => {
+          const pid = e.personId || e.id;
+          if (pid === targetPersonId) {
+            return {
+              ...e,
+              parentId: newParentId,
+              fatherName: newParentName.trim()
+            };
+          }
+          return e;
+        });
+        return [newParentEntry, ...updated];
+      });
       setShowAddParentModal(false);
     }
   };
@@ -254,28 +278,23 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     e.preventDefault();
     if (!insertBranchInfo || !insertPersonName.trim() || !setEntries) return;
 
+    const parentId = insertBranchInfo.parentId;
+    const childId = insertBranchInfo.childId;
     const parentName = insertBranchInfo.parentName.trim();
     const childName = insertBranchInfo.childName.trim();
     const newName = insertPersonName.trim();
 
-    const cleanP = cleanName(parentName);
-    const cleanC = cleanName(childName);
-    const cleanN = cleanName(newName);
-
-    if (cleanN === cleanP || cleanN === cleanC) {
-      alert('لا يمكن أن يكون اسم الشخص الجديد متطابقاً مع اسم الأب أو الابن.');
-      return;
-    }
-
     // Look up parent's ancestry
-    const parentEntry = entries.find(entry => cleanName(entry.sonName) === cleanP);
-    const parentFather = cleanName(parentEntry?.fatherName || '');
-    const parentGrandfather = cleanName(parentEntry?.grandfatherName || '');
+    const parentEntry = entries.find(entry => (entry.personId || entry.id) === parentId);
+    const parentFather = parentEntry?.fatherName || '';
+    const parentGrandfather = parentEntry?.grandfatherName || '';
 
-    // 1. Create entry for newPerson as child of parentName
-    const newPersonId = `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    // 1. Create entry for newPerson as child of parentId (with unique ID)
+    const newPersonId = `p-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
     const newPersonEntry: RelationEntry = {
-      id: newPersonId,
+      id: `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      personId: newPersonId,
+      parentId: parentId,
       sonName: newName,
       fatherName: parentName,
       grandfatherName: parentFather,
@@ -284,41 +303,36 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
       createdAt: new Date().toISOString()
     };
 
-    // 2. Update entries so childName now has newName as fatherName
+    // 2. Update child's entry so child now has newPersonId as parentId
     setEntries(prev => {
-      const childExists = prev.some(e => cleanName(e.sonName) === cleanC);
-      let updated = prev.map(entry => {
-        // Update childName's direct entry
-        if (cleanName(entry.sonName) === cleanC) {
+      let childFound = false;
+      const updated = prev.map(entry => {
+        const pid = entry.personId || entry.id;
+        if (pid === childId) {
+          childFound = true;
           return {
             ...entry,
+            parentId: newPersonId,
             fatherName: newName,
             grandfatherName: parentName,
             greatGrandfatherName: parentFather
           };
         }
-        // Update downstream children of childName
-        if (cleanName(entry.fatherName) === cleanC) {
+        if (entry.parentId === childId) {
           return {
             ...entry,
             grandfatherName: newName,
             greatGrandfatherName: parentName
           };
         }
-        // Update downstream grandchildren of childName
-        if (cleanName(entry.grandfatherName) === cleanC) {
-          return {
-            ...entry,
-            greatGrandfatherName: newName
-          };
-        }
         return entry;
       });
 
-      if (!childExists) {
-        const childId = `entry-${Date.now() + 1}-${Math.random().toString(36).substring(2, 6)}`;
+      if (!childFound) {
         updated.push({
-          id: childId,
+          id: `entry-${Date.now() + 1}-${Math.random().toString(36).substring(2, 6)}`,
+          personId: childId,
+          parentId: newPersonId,
           sonName: childName,
           fatherName: newName,
           grandfatherName: parentName,
@@ -327,7 +341,6 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
         });
       }
 
-      // Add the new person entry
       return [newPersonEntry, ...updated];
     });
 
@@ -536,34 +549,57 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null); // stores uniqueId
-  const [selectedBranch, setSelectedBranch] = useState<{ parentName: string; childName: string } | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState<{
+    parentId: string;
+    childId: string;
+    parentName: string;
+    childName: string;
+  } | null>(null);
   const [showSettingsPanel, setShowSettingsPanel] = useState<boolean>(false);
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
   const [isExportingHD, setIsExportingHD] = useState<boolean>(false);
 
-  const handleRemoveBranchRelation = (sonName: string, fatherName: string) => {
+  const handleRemoveBranchRelation = (childId: string) => {
     if (!setEntries) return;
     setEntries(prev => prev.map(e => {
-      if (cleanName(e.sonName) === cleanName(sonName) && cleanName(e.fatherName) === cleanName(fatherName)) {
-        return { ...e, fatherName: '' };
+      const pid = e.personId || e.id;
+      if (pid === childId) {
+        return {
+          ...e,
+          parentId: undefined,
+          fatherName: '',
+          grandfatherName: '',
+          greatGrandfatherName: ''
+        };
       }
       return e;
     }));
     setSelectedBranch(null);
-    alert(`تم فصل (${sonName}) عن الغصن (الوالد ${fatherName}) بنجاح.`);
   };
 
   const handleCanvasDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const sonName = e.dataTransfer.getData('text/plain');
-    if (sonName && setEntries) {
-      setEntries(prev => prev.map(item => {
-        if (cleanName(item.sonName) === cleanName(sonName)) {
-          return { ...item, fatherName: '' };
-        }
-        return item;
-      }));
-      alert(`تم فصل (${sonName}) ونقله إلى مكان خالي ليصبح جذراً مستقلاً.`);
+    try {
+      const raw = e.dataTransfer.getData('text/plain');
+      const data = JSON.parse(raw);
+      if (data.personId && setEntries) {
+        setEntries(prev => prev.map(item => {
+          const pid = item.personId || item.id;
+          if (pid === data.personId) {
+            return {
+              ...item,
+              parentId: undefined,
+              fatherName: '',
+              grandfatherName: '',
+              greatGrandfatherName: ''
+            };
+          }
+          return item;
+        }));
+        setSelectedBranch(null);
+      }
+    } catch {
+      // fallback
     }
   };
 
@@ -800,8 +836,8 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
     const actualNodeX = (memberPos ? memberPos.x : x) + (nodeOffsets[member.uniqueId]?.x || 0);
     const actualNodeY = (memberPos ? memberPos.y : y) + (nodeOffsets[member.uniqueId]?.y || 0);
 
-    const isSelectedBranchChild = selectedBranch && cleanName(selectedBranch.childName) === cleanName(member.name);
-    const isSelectedBranchParent = selectedBranch && cleanName(selectedBranch.parentName) === cleanName(member.name);
+    const isSelectedBranchChild = selectedBranch && selectedBranch.childId === member.uniqueId;
+    const isSelectedBranchParent = selectedBranch && selectedBranch.parentId === member.uniqueId;
     const isValidBranchTarget = selectedBranch && !isSelectedBranchChild && !isSelectedBranchParent;
 
     return (
@@ -814,7 +850,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           const actualChildX = (childPos ? childPos.x : childDefaultX) + (nodeOffsets[child.uniqueId]?.x || 0);
           const actualChildY = (childPos ? childPos.y : childDefaultY) + (nodeOffsets[child.uniqueId]?.y || 0);
 
-          const isBranchSelected = selectedBranch && cleanName(selectedBranch.parentName) === cleanName(member.name) && cleanName(selectedBranch.childName) === cleanName(child.name);
+          const isBranchSelected = selectedBranch && selectedBranch.parentId === member.uniqueId && selectedBranch.childId === child.uniqueId;
           const branchPathStr = getBranchPath(member.uniqueId, child.uniqueId, actualNodeX, actualNodeY, actualChildX, actualChildY);
           const midX = (actualNodeX + actualChildX) / 2;
           const midY = (actualNodeY + actualChildY) / 2;
@@ -833,7 +869,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 className="cursor-pointer"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedBranch({ parentName: member.name, childName: child.name });
+                  setSelectedBranch({
+                    parentId: member.uniqueId,
+                    childId: child.uniqueId,
+                    parentName: member.name,
+                    childName: child.name
+                  });
                 }}
               />
               {/* Visible Branch line */}
@@ -849,7 +890,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 style={{ filter: isBranchSelected ? 'drop-shadow(0 0 6px rgba(245, 158, 11, 0.9))' : undefined }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setSelectedBranch({ parentName: member.name, childName: child.name });
+                  setSelectedBranch({
+                    parentId: member.uniqueId,
+                    childId: child.uniqueId,
+                    parentName: member.name,
+                    childName: child.name
+                  });
                 }}
               />
               {/* Selected Branch Action Badge with Midpoint "+" Button, Move Handle & Disconnect */}
@@ -875,7 +921,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   <g
                     onClick={(e) => {
                       e.stopPropagation();
-                      setInsertBranchInfo({ parentName: member.name, childName: child.name });
+                      setInsertBranchInfo({
+                        parentId: member.uniqueId,
+                        childId: child.uniqueId,
+                        parentName: member.name,
+                        childName: child.name
+                      });
                       setInsertPersonName('');
                       setInsertPersonTags([]);
                       setShowInsertModal(true);
@@ -896,8 +947,13 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   <g
                     draggable={true}
                     onDragStart={(e) => {
-                      e.dataTransfer.setData('text/plain', child.name);
-                      setSelectedBranch({ parentName: member.name, childName: child.name });
+                      e.dataTransfer.setData('text/plain', JSON.stringify({ personId: child.uniqueId, personName: child.name }));
+                      setSelectedBranch({
+                        parentId: member.uniqueId,
+                        childId: child.uniqueId,
+                        parentName: member.name,
+                        childName: child.name
+                      });
                       e.stopPropagation();
                     }}
                     title="اسحب هذا المقبض وأفلته فوق أي شخص لربط الغصن به، أو انقر على اسم الأب الجديد مباشرة"
@@ -913,7 +969,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                   <g
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleRemoveBranchRelation(child.name, member.name);
+                      handleRemoveBranchRelation(child.uniqueId);
                     }}
                     title="فصل هذا الغصن وتحويله إلى شجرة مستقلة"
                     className="cursor-pointer hover:scale-115 transition-transform"
@@ -964,7 +1020,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             });
           }}
           onDragStart={(e) => {
-            e.dataTransfer.setData('text/plain', member.name);
+            e.dataTransfer.setData('text/plain', JSON.stringify({ personId: member.uniqueId, personName: member.name }));
             e.stopPropagation();
           }}
           onDragOver={(e) => {
@@ -974,26 +1030,31 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           onDrop={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            const draggedSon = e.dataTransfer.getData('text/plain');
-            const targetFather = member.name;
-            if (draggedSon && cleanName(draggedSon) !== cleanName(targetFather)) {
-              handleReparentNode(draggedSon, targetFather);
-              setSelectedBranch(null);
+            try {
+              const raw = e.dataTransfer.getData('text/plain');
+              const data = JSON.parse(raw);
+              const draggedSonId = data.personId;
+              if (draggedSonId && draggedSonId !== member.uniqueId) {
+                handleReparentNode(draggedSonId, member.uniqueId, member.name);
+                setSelectedBranch(null);
+              }
+            } catch {
+              // fallback
             }
           }}
           onClick={(e) => {
             e.stopPropagation();
             if (selectedBranch) {
-              if (cleanName(selectedBranch.childName) === cleanName(member.name)) {
+              if (selectedBranch.childId === member.uniqueId) {
                 alert('لا يمكن ربط الشخص بنفسه.');
                 return;
               }
-              if (cleanName(selectedBranch.parentName) === cleanName(member.name)) {
+              if (selectedBranch.parentId === member.uniqueId) {
                 alert(`(${selectedBranch.childName}) مرتبط بالفعل كابن لـ (${member.name}).`);
                 setSelectedBranch(null);
                 return;
               }
-              handleReparentNode(selectedBranch.childName, member.name);
+              handleReparentNode(selectedBranch.childId, member.uniqueId, member.name);
               return;
             }
             setSelectedPerson(member.uniqueId);
@@ -1126,7 +1187,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 transform={`translate(0, ${isSheikh ? dynamicSheikhRadius + 14 : 32})`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleOpenAddModal(member.name);
+                  handleOpenAddModal(member.uniqueId, member.name);
                 }}
                 style={{ cursor: 'pointer' }}
                 title="إضافة ابن جديد تحت هذا الشخص"
@@ -1140,7 +1201,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 transform={`translate(0, ${isSheikh ? -(dynamicSheikhRadius + 14) : -32})`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleOpenAddParentModal(member.name);
+                  handleOpenAddParentModal(member.uniqueId, member.name);
                 }}
                 style={{ cursor: 'pointer' }}
                 title="إضافة أب أو جد أعلى هذا الشخص"
@@ -1154,7 +1215,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                 transform={`translate(${dynamicRx - 10}, -30)`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDeleteNode(member.name);
+                  onDeleteNode(member.uniqueId, member.name);
                 }}
                 style={{ cursor: 'pointer' }}
                 title="حذف الفرد وجميع فروعه"
@@ -1540,7 +1601,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                setInsertBranchInfo({ parentName: selectedBranch.parentName, childName: selectedBranch.childName });
+                setInsertBranchInfo({
+                  parentId: selectedBranch.parentId,
+                  childId: selectedBranch.childId,
+                  parentName: selectedBranch.parentName,
+                  childName: selectedBranch.childName
+                });
                 setInsertPersonName('');
                 setInsertPersonTags([]);
                 setShowInsertModal(true);
@@ -1645,7 +1711,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
                       stroke="#d4af37"
                       strokeWidth="3"
                       className="cursor-pointer hover:scale-110 transition-transform shadow-2xl"
-                      onClick={() => handleOpenAddParentModal('')}
+                      onClick={() => handleOpenAddParentModal('', '')}
                     />
                     <text x="0" y="-32" textAnchor="middle" fill="#ffffff" fontSize="42" fontWeight="bold" className="cursor-pointer pointer-events-none">+</text>
                     <text x="0" y="30" textAnchor="middle" fill="#5c3a21" fontSize="22" fontFamily={`'${currentFont}', sans-serif`} fontWeight="bold">
@@ -1997,7 +2063,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           </div>
           <button
             onClick={() => {
-              handleOpenRenameModal(contextMenu.member!.name);
+              handleOpenRenameModal(contextMenu.member!.uniqueId, contextMenu.member!.name);
               setContextMenu(prev => ({ ...prev, visible: false }));
             }}
             className="w-full text-right px-4 py-2 text-xs font-semibold hover:bg-amber-50 dark:hover:bg-stone-800 flex items-center gap-2 cursor-pointer transition-colors"
@@ -2007,7 +2073,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           </button>
           <button
             onClick={() => {
-              handleOpenAddModal(contextMenu.member!.name);
+              handleOpenAddModal(contextMenu.member!.uniqueId, contextMenu.member!.name);
               setContextMenu(prev => ({ ...prev, visible: false }));
             }}
             className="w-full text-right px-4 py-2 text-xs font-semibold hover:bg-amber-50 dark:hover:bg-stone-800 flex items-center gap-2 cursor-pointer transition-colors"
@@ -2017,7 +2083,7 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
           </button>
           <button
             onClick={() => {
-              onDeleteNode(contextMenu.member!.name);
+              onDeleteNode(contextMenu.member!.uniqueId, contextMenu.member!.name);
               setContextMenu(prev => ({ ...prev, visible: false }));
             }}
             className="w-full text-right px-4 py-2 text-xs font-semibold hover:bg-red-50 dark:hover:bg-stone-900/50 text-red-600 dark:text-red-400 flex items-center gap-2 cursor-pointer transition-colors border-t border-stone-100 dark:border-stone-800"
@@ -2036,12 +2102,12 @@ export const FamilyTreeViewer: React.FC<FamilyTreeViewerProps> = ({
               تحرير وتعديل اسم الفرد
             </h3>
             <p className="text-xs text-stone-600 dark:text-stone-300">
-              أدخل الاسم الجديد لـ ({renameTargetName}). سيتم تحديث جميع العلاقات والروابط تلقائياً.
+              أدخل الاسم الجديد لـ ({renameTargetName}).
             </p>
             <form onSubmit={(e) => {
               e.preventDefault();
-              if (newEditedName.trim() && renameTargetName) {
-                handleRenameNode(renameTargetName, newEditedName.trim());
+              if (newEditedName.trim() && renameTargetId) {
+                handleRenameNode(renameTargetId, newEditedName.trim());
                 setShowRenameModal(false);
               }
             }} className="space-y-4">

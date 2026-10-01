@@ -163,10 +163,14 @@ export default function App() {
     }
   };
 
-  const handleAddChild = (fatherName: string, sonName: string, tags: string[] = []) => {
+  const handleAddChild = (fatherIdOrName: string, sonName: string, tags: string[] = [], parentId?: string) => {
+    const personId = `p-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+    const effectiveParentId = parentId || (fatherIdOrName.startsWith('p-') || fatherIdOrName.startsWith('root-') ? fatherIdOrName : undefined);
     const newEntry: RelationEntry = {
       id: `entry-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      fatherName: fatherName,
+      personId: personId,
+      parentId: effectiveParentId,
+      fatherName: fatherIdOrName,
       sonName: sonName,
       tags: tags,
       createdAt: new Date().toISOString()
@@ -174,24 +178,29 @@ export default function App() {
     setEntries(prev => [newEntry, ...prev]);
   };
 
-  const handleDeleteNode = (personName: string) => {
-    if (window.confirm(`هل أنت متأكد من حذف (${personName}) وجميع فروعه وأبنائه المرتبطين به من الشجرة؟`)) {
-      // Find all descendant names recursively
+  const handleDeleteNode = (personIdOrName: string, displayName?: string) => {
+    const nameToShow = displayName || personIdOrName;
+    if (window.confirm(`هل أنت متأكد من حذف (${nameToShow}) وجميع فروعه وأبنائه المرتبطين به من الشجرة؟`)) {
+      // Find all descendant personIds recursively strictly by ID
       const descendants = new Set<string>();
-      const queue = [personName];
+      const queue = [personIdOrName];
       while (queue.length > 0) {
-        const curr = queue.shift()!;
-        descendants.add(curr);
+        const currId = queue.shift()!;
+        descendants.add(currId);
         entries.forEach(e => {
-          if (e.fatherName === curr && e.sonName) {
-            descendants.add(e.sonName);
-            queue.push(e.sonName);
+          const ePersonId = e.personId || e.id;
+          if ((e.parentId === currId || e.fatherName === currId) && !descendants.has(ePersonId)) {
+            descendants.add(ePersonId);
+            queue.push(ePersonId);
           }
         });
       }
 
-      // Filter out any entries where sonName or fatherName is in descendants
-      setEntries(prev => prev.filter(e => !descendants.has(e.sonName)));
+      // Filter out only this node and its descendants by ID
+      setEntries(prev => prev.filter(e => {
+        const pid = e.personId || e.id;
+        return !descendants.has(pid);
+      }));
     }
   };
 

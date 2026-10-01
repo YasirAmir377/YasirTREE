@@ -1,6 +1,8 @@
 export interface RelationEntry {
   id: string;
+  personId?: string; // Unique persistent ID for this person node
   sonName: string;
+  parentId?: string; // Unique persistent ID of the parent person node (empty if root)
   fatherName: string;
   grandfatherName?: string;
   greatGrandfatherName?: string;
@@ -9,11 +11,15 @@ export interface RelationEntry {
 }
 
 export interface FamilyMember {
-  uniqueId: string;
-  name: string;
+  uniqueId: string; // The unique person ID (e.g. UUID)
+  name: string; // The displayed name (can be duplicate anywhere)
+  personId?: string;
+  parentId?: string;
+  parentName?: string;
   children: FamilyMember[];
   generation: number;
   parents: string[];
+  tags?: string[];
 }
 
 export type ViewMode = 'tree' | 'entries';
